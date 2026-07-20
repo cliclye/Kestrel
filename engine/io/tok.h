@@ -115,12 +115,27 @@ static void tok_load(Tok *T, const char *path){
         hm_put(&T->vocab, k, (int)strlen(k), id);
         T->id2str[id]=(char*)k;
     }
-    /* merges: "left\0right" -> rank=i */
+    /* merges: "left\0right" -> rank=i
+     * HF formats: either [["l","r"], ...] (GLM) or ["l r", ...] (Qwen/GPT-2). */
     int mc=1; while(mc < merges->len*2) mc<<=1;
     hm_init(&T->merges, mc);
     for(int i=0;i<merges->len;i++){
         jval *pr=merges->kids[i];
-        const char *l=pr->kids[0]->str, *r=pr->kids[1]->str;
+        const char *l=NULL, *r=NULL;
+        if(pr->t==J_ARR && pr->len>=2 && pr->kids[0]->str && pr->kids[1]->str){
+            l=pr->kids[0]->str; r=pr->kids[1]->str;
+        } else if(pr->t==J_STR && pr->str){
+            const char *sp=strchr(pr->str,' ');
+            if(!sp || sp==pr->str || !sp[1]) continue;
+            int ll=(int)(sp - pr->str);
+            char *left=malloc((size_t)ll+1); memcpy(left, pr->str, (size_t)ll); left[ll]=0;
+            char *right=strdup(sp+1);
+            int rl=(int)strlen(right);
+            char *key=malloc((size_t)ll+1+(size_t)rl); memcpy(key,left,ll); key[ll]=0; memcpy(key+ll+1,right,rl);
+            hm_put(&T->merges, key, ll+1+rl, i);
+            free(left); free(right);
+            continue;
+        } else continue;
         int ll=(int)strlen(l), rl=(int)strlen(r);
         char *key=malloc(ll+1+rl); memcpy(key,l,ll); key[ll]=0; memcpy(key+ll+1,r,rl);
         hm_put(&T->merges, key, ll+1+rl, i);

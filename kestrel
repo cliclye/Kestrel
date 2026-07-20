@@ -192,6 +192,24 @@ def _is_impostor_pack(snap: Path) -> bool:
     return False
 
 
+def _dense_engine_supported(snap: Path) -> bool:
+    """True when kestrel-engine dense path can load this SNAP (Qwen2/Llama/Mistral)."""
+    cfg_path = snap / "config.json"
+    if not cfg_path.is_file():
+        return False
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if cfg.get("n_routed_experts") or cfg.get("num_experts") or cfg.get("num_local_experts"):
+        return False
+    mt = str(cfg.get("model_type") or "").lower()
+    if mt in ("qwen2", "llama", "mistral"):
+        return True
+    arches = " ".join(str(a) for a in (cfg.get("architectures") or []))
+    return any(x in arches for x in ("Qwen2ForCausalLM", "LlamaForCausalLM", "MistralForCausalLM"))
+
+
 def _chat_mode(snap: Path) -> str:
     """Return preview | engine | engine-oracle | blocked."""
     meta = _snap_meta(snap)
@@ -202,8 +220,10 @@ def _chat_mode(snap: Path) -> str:
     if _is_impostor_pack(snap):
         return "blocked"
     if chat == "preview":
-        # Real small-model downloads only
+        # Real small-model downloads: prefer dense engine when supported
         if meta.get("weights") and _has_real_weights(snap):
+            if _dense_engine_supported(snap):
+                return "engine"
             return "preview"
         return "blocked"
     if chat == "engine-oracle" or mid.startswith("kestrel/glm-tiny"):
@@ -213,6 +233,35 @@ def _chat_mode(snap: Path) -> str:
     if _is_tiny_stub(snap) and not mid.startswith("kestrel/"):
         return "blocked"
     return "engine"
+
+
+def _format_engine_prompt(snap: Path, messages: list | None, flat_prompt: str) -> str:
+    """Apply HF chat template when available so dense/engine packs get instruct formatting."""
+    if messages:
+        try:
+            from transformers import AutoTokenizer
+
+            tok = AutoTokenizer.from_pretrained(str(snap), trust_remote_code=True)
+            chat = []
+            for m in messages:
+                role = m.get("role") or "user"
+                content = (m.get("content") or "").strip()
+                if content and role in ("user", "assistant", "system"):
+                    chat.append({"role": role, "content": content})
+            if chat and hasattr(tok, "apply_chat_template") and tok.chat_template:
+                return tok.apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
+        except Exception as e:
+            sys.stderr.write(f"[kestrel] chat template fallback: {e}\n")
+    if messages:
+        parts = []
+        for m in messages:
+            role = m.get("role") or "user"
+            content = (m.get("content") or "").strip()
+            if content:
+                parts.append(f"{role}: {content}")
+        if parts:
+            return "\n".join(parts) + "\nassistant:"
+    return flat_prompt
 
 
 def _preview_load_src(snap: Path | None, meta: dict, repo: str) -> str:
@@ -325,12 +374,21 @@ def _preview_chat(
         )
 
 
-def _engine_chat(snap: Path, prompt: str, max_tokens: int, temperature: float) -> tuple[str, dict]:
+def _engine_chat(
+    snap: Path,
+    prompt: str,
+    max_tokens: int,
+    temperature: float,
+    *,
+    messages: list | None = None,
+) -> tuple[str, dict]:
     import time
 
     t0 = time.perf_counter()
+    formatted = _format_engine_prompt(snap, messages, prompt)
     env = _engine_env(snap, None)
-    env["PROMPT"] = prompt
+    env["PROMPT"] = formatted
+    env["COLI_PROMPT"] = formatted
     env["NGEN"] = str(max_tokens)
     env["TEMP"] = str(temperature)
     env["QUIET"] = "1"
@@ -448,7 +506,9 @@ def _agent_run(
             text, stats = _preview_chat(messages, max_tokens, temperature, snap=snap)
         else:
             flat = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
-            text, stats = _engine_chat(snap, flat[-4000:], max_tokens, temperature)
+            text, stats = _engine_chat(
+                snap, flat[-4000:], max_tokens, temperature, messages=messages
+            )
         last_text = text or ""
         calls = _agent_ws.parse_tool_calls(last_text)
         step: dict = {
@@ -926,6 +986,8 @@ def cmd_pull(ns: argparse.Namespace) -> int:
                 dest = out
 
     chat_mode = "preview" if is_small or entry.get("chat") == "preview" else "engine"
+    if chat_mode == "preview" and _dense_engine_supported(dest):
+        chat_mode = "engine"
     _write_kestrel_meta(
         dest,
         mid,
@@ -938,6 +1000,7 @@ def cmd_pull(ns: argparse.Namespace) -> int:
         source=entry.get("source"),
         size_bytes=_dir_bytes(dest),
         weight_bytes=got,
+        engine="kestrel-engine" if chat_mode == "engine" else entry.get("engine") or "preview",
     )
     print(f"ready: {dest} ({_fmt_bytes(_dir_bytes(dest))})")
     if job_id:
@@ -1395,7 +1458,9 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
                             prompt = m.get("content") or ""
                     if not ENGINE_BIN.is_file():
                         return self._json(503, {"error": "kestrel-engine missing — run: kestrel build"})
-                    text, stats = _engine_chat(snap, prompt, max_tokens, temperature)
+                    text, stats = _engine_chat(
+                        snap, prompt, max_tokens, temperature, messages=messages
+                    )
                     backend = "kestrel-engine"
                 return self._json(
                     200,
@@ -1457,6 +1522,12 @@ def cmd_bench(ns: argparse.Namespace) -> int:
     """Run fair stock vs kestrel bench, refresh chart, verify gates."""
     if getattr(ns, "real", False):
         script = ROOT / "tools" / "real_model_bench.py"
+        if not script.is_file():
+            print(f"missing {script}", file=sys.stderr)
+            return 1
+        return subprocess.call([sys.executable, str(script)], cwd=str(ROOT))
+    if getattr(ns, "dense", False):
+        script = ROOT / "tools" / "dense_qwen_bench.py"
         if not script.is_file():
             print(f"missing {script}", file=sys.stderr)
             return 1
@@ -1566,9 +1637,14 @@ def main() -> int:
         help="frontier MoE bench (needs KESTREL_SNAP); refuses glm_tiny",
     )
     p.add_argument(
+        "--dense",
+        action="store_true",
+        help="Qwen2.5-Coder-1.5B without/with kestrel-engine dense path (needs pull + build)",
+    )
+    p.add_argument(
         "--qwen",
         action="store_true",
-        help="Qwen2.5-7B without/with Kestrel Mac preview (needs ./kestrel pull … --weights)",
+        help="legacy Qwen2.5-7B preview-path bench (see --dense for engine)",
     )
     p.add_argument(
         "--laptop",

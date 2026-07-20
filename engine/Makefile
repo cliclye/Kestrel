@@ -11,7 +11,7 @@ DETECT_CC := $(if $(filter default,$(origin CC)),clang,$(CC))
 UNAME_S   := $(shell uname -s 2>/dev/null)
 
 ROOT := $(abspath .)
-INCLUDES := -I$(ROOT) -I$(ROOT)/io -I$(ROOT)/memory -I$(ROOT)/include
+INCLUDES := -I$(ROOT) -I$(ROOT)/io -I$(ROOT)/memory -I$(ROOT)/include -I$(ROOT)/runtime
 
 ifeq ($(UNAME_S),Darwin)
 CC      = clang
@@ -44,15 +44,18 @@ all: kestrel-engine
 memory/budget.o: memory/budget.c memory/budget.h
 	$(CC) $(CFLAGS) -c memory/budget.c -o memory/budget.o
 
-runtime/engine.o: runtime/engine.c memory/budget.h
+runtime/engine.o: runtime/engine.c memory/budget.h runtime/dense.h
 	$(CC) $(CFLAGS) -c runtime/engine.c -o runtime/engine.o
 
-kestrel-engine: runtime/engine.o memory/budget.o
-	$(CC) $(CFLAGS) -o $@ runtime/engine.o memory/budget.o $(LDFLAGS)
+runtime/dense.o: runtime/dense.c runtime/dense.h io/tok.h io/st.h
+	$(CC) $(CFLAGS) -c runtime/dense.c -o runtime/dense.o
+
+kestrel-engine: runtime/engine.o runtime/dense.o memory/budget.o
+	$(CC) $(CFLAGS) -o $@ runtime/engine.o runtime/dense.o memory/budget.o $(LDFLAGS)
 
 # SNAP path relative to engine/ — fixtures live in fixtures/
 test-oracle: kestrel-engine
 	SNAP=./fixtures/glm_tiny TF=1 ./kestrel-engine 64 16 16
 
 clean:
-	rm -f kestrel-engine runtime/engine.o memory/budget.o
+	rm -f kestrel-engine runtime/engine.o runtime/dense.o memory/budget.o

@@ -34,6 +34,7 @@
 #include "uring.h"
 #endif
 #include "tok.h"
+#include "dense.h"
 #include "tier.h"
 #include "grammar.h"                              /* metodo F: draft grammaticali (#48) */
 #include "schema_gbnf.h"                          /* SCHEMA=: JSON-Schema -> GBNF for method F */
@@ -6028,6 +6029,8 @@ int main(int argc, char **argv){
     }
 #endif
     const char *snap=getenv("SNAP"); if(!snap){fprintf(stderr,"SNAP=<dir>\n");return 1;}
+    /* Dense Qwen2/Llama/Mistral packs share this binary — same IDOT/int8 path family. */
+    if(dense_is_arch(snap)) return dense_run(argc, argv);
     g_nopack = getenv("NOPACK")?1:0;
     g_drop = getenv("DROP")?1:0;
     g_prefetch = getenv("PREFETCH")?atoi(getenv("PREFETCH")):0;

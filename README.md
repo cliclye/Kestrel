@@ -20,7 +20,7 @@
 
 **Kestrel** is a clean-slate product for running open Mixture-of-Experts models on your machine. It ships:
 
-- **`kestrel-engine`** — modular CPU MoE runtime (primary binary under [`engine/`](engine/))
+- **`kestrel-engine`** — modular CPU runtime under [`engine/`](engine/): GLM MoE **and** dense Qwen2/Llama/Mistral (int8 + IDOT)
 - **Mac app** — Tauri shell around Library · Chat · Agent · Advanced
 - **CLI** — `./kestrel build | pull | app | chat | oracle`
 
@@ -105,27 +105,55 @@ KESTREL_SNAP=~/.kestrel/models/<converted> python3 tools/real_model_bench.py
 
 Until a real SNAP exists locally, we **publish no invented GLM/Kimi speedups**. Status file: [`docs/real_model_bench.json`](docs/real_model_bench.json).
 
-### Real model · Qwen2.5-7B Instruct (same laptop)
+### Real model · Qwen2.5-Coder-1.5B (dense engine · same laptop)
 
-Installed and measured on a **MacBook Air M4 16 GB** (same machine as above):
+`kestrel-engine` auto-detects dense Qwen2 / Llama / Mistral packs (GQA + SwiGLU) and runs them on an int8 + NEON IDOT path — not the transformers Mac-preview fallback.
+
+**Protocol (verified):** decode-only tok/s on both sides (prefill excluded), same chat-templated prompt, greedy, `max_new_tokens=48`, 1 warmup + 3 trials. An earlier short-prompt run that timed transformers `generate()` end-to-end against engine decode-only **inflated** the Kestrel delta — that figure is discarded.
+
+Measured on a **MacBook Air M4 16 GB**:
 
 | | Without Kestrel | With Kestrel |
 |---|---|---|
-| Path | stock `transformers` · **CPU** · float16 | Kestrel Mac preview · **MPS** · float16 |
-| Download | ~15.2 GB HF weights | same local SNAP |
-| Decode tok/s | **~0.013** | **~0.008** |
-| Peak RSS | ~9.0 GB | ~9–10 GB |
-| `kestrel-engine` | — | **does not load** (dense Qwen ≠ GLM MoE SNAP) |
+| Path | stock `transformers` · **CPU** · float16 | **`kestrel-engine` dense** · int8 + IDOT |
+| Decode tok/s | **~19.3** | **~12.2** |
+| Peak RSS | ~6.2 GB | **~2.7 GB** |
+| Δ tok/s | — | **−37%** |
+| Δ RSS | — | **−56%** |
+| Output | coherent | same text (matched) |
 
-Full dump: [`docs/qwen7b_bench.json`](docs/qwen7b_bench.json).
+Full dump: [`docs/dense_qwen_bench.json`](docs/dense_qwen_bench.json).
+
+```bash
+./kestrel pull Qwen/Qwen2.5-Coder-1.5B-Instruct --weights
+./kestrel build
+python3 tools/dense_qwen_bench.py
+# or: ./kestrel bench --dense
+```
+
+**Honest takeaway:** on a model that already fits in RAM, stock transformers CPU is still faster today. The dense engine win is **memory** (and a single binary path for dense + MoE). Throughput work continues; do not treat glm_tiny **+548%** as a Qwen claim.
+
+### Real model · Qwen2.5-7B Instruct (same laptop)
+
+On 16 GB, stock fp16 7B was previously **swap-bound** (~0.01 tok/s via transformers/preview). The dense engine loads it in int8:
+
+| | Without Kestrel (legacy preview dump) | With Kestrel (dense engine probe) |
+|---|---|---|
+| Path | `transformers` CPU/MPS · float16 | **`kestrel-engine` dense** · int8 + IDOT |
+| Decode tok/s | **~0.01** (swap-bound) | **~3.3** (NGEN=24 probe) |
+| Peak RSS | ~9–10 GB | ~8.2 GB |
+| Output | thrashing | coherent (`Hi there!`) |
+
+Legacy preview-only dump: [`docs/qwen7b_bench.json`](docs/qwen7b_bench.json).
 
 ```bash
 ./kestrel pull Qwen/Qwen2.5-7B-Instruct --weights
-python3 tools/qwen7b_bench.py
-# or: ./kestrel bench --qwen
+./kestrel build
+SNAP=~/.kestrel/models/Qwen__Qwen2.5-7B-Instruct \
+  PROMPT='…' NGEN=24 ./engine/kestrel-engine 64 4 4
 ```
 
-**Honest takeaway:** on 16 GB unified memory with a normal desktop session open, **Qwen2.5-7B fp16 is memory/swap-bound** — both sides land near **~0.01 tok/s**, so this is **not** a throughput win to advertise. Prefer ≤3–4B on this class of Mac, quit other apps / free RAM before 7B, or use a larger machine. Engine speedups in the micro-fixture section still apply only to the GLM MoE `kestrel-engine` path.
+**Honest takeaway:** for 7B on this Mac, the dense path is what makes generation usable. Prefer ≤3–4B for snappy chat; 7B works but stays heavy (~8 GB RSS).
 
 ### Laptop-limit stress (synthetic MoE · pushes this machine)
 
@@ -166,7 +194,7 @@ This is still **not** a frontier MoE claim.
 
 1. **Library** lists open MoE families (GLM, Qwen, Kimi, DeepSeek, Mistral, Llama) plus a **Mac 16GB** filter.  
    - **Kestrel Chat Preview** — honest small on-device chat (SmolLM2).  
-   - **Mac 16GB** — small HF instruct models under ~20GB (Qwen2.5/3, SmolLM2 1.7B, Phi-3.5, Gemma 2 2B, TinyLlama, R1-distill). Install downloads real weights.  
+   - **Mac 16GB** — small HF instruct models under ~20GB (Qwen2.5, SmolLM2 1.7B, Phi-3.5, Gemma 2 2B, TinyLlama, R1-distill). Qwen2.5 packs route to **`kestrel-engine` dense**; others use the Mac preview path until supported.  
    - **Download weights** — real Hugging Face download for frontier MoEs (confirms size); **never** installs a tiny stub labeled as Kimi/Qwen/etc.  
 2. **Chat** only lists installs that are actually chat-capable. Requesting an uninstalled id (e.g. K2.6) returns an error — it will **not** silently use another model.  
 3. **Agent** — pick a folder on disk; a local model can list/read/edit files under that root only (Cursor-style, fully on-device). Prefer a small coder (e.g. Qwen2.5-Coder-1.5B) on 16GB Macs.  
@@ -232,13 +260,16 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000) or the Mac `.app`.
 ```bash
 ./kestrel bench              # synthetic glm_tiny micro-fixture (not a real model)
 ./kestrel bench --smoke
-./kestrel bench --qwen       # Qwen2.5-7B without/with Mac preview (needs pull)
+./kestrel bench --dense      # Qwen2.5-Coder-1.5B without/with dense engine
+./kestrel bench --qwen       # legacy Qwen2.5-7B preview-path dump
+
 ./kestrel bench --laptop     # glm_stress single-stream + concurrent soak (16GB class)
 ./kestrel bench --real       # GLM-5.2 / Kimi — needs KESTREL_SNAP + hundreds of GB free
 ```
 
 Micro-fixture numbers: [`docs/full_bench.json`](docs/full_bench.json).  
-Qwen2.5-7B: [`docs/qwen7b_bench.json`](docs/qwen7b_bench.json).  
+Qwen2.5-Coder dense engine: [`docs/dense_qwen_bench.json`](docs/dense_qwen_bench.json).  
+Qwen2.5-7B (legacy preview): [`docs/qwen7b_bench.json`](docs/qwen7b_bench.json).  
 Laptop-limit: [`docs/laptop_limit_bench.json`](docs/laptop_limit_bench.json), [`docs/laptop_soak_bench.json`](docs/laptop_soak_bench.json).  
 Frontier status: [`docs/real_model_bench.json`](docs/real_model_bench.json).
 

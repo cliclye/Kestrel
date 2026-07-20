@@ -3,7 +3,7 @@
     {
       "id": "kestrel/chat-preview",
       "name": "Kestrel Chat Preview",
-      "description": "Honest local chat via SmolLM2-360M on-device. Not Kimi, Qwen, or any frontier MoE — use this to talk; use Download for real model weights.",
+      "description": "Honest local chat via SmolLM2-360M on-device. Not Kimi, Qwen, or any frontier MoE \u2014 use this to talk; use Download for real model weights.",
       "size_gb": 0.7,
       "license": "Apache-2.0",
       "source": "preview",
@@ -13,12 +13,16 @@
       "status": "ready",
       "engine": "preview",
       "ram_gb": 2,
-      "tags": ["preview", "chat", "ready"]
+      "tags": [
+        "preview",
+        "chat",
+        "ready"
+      ]
     },
     {
       "id": "kestrel/glm-tiny-demo",
       "name": "GLM Tiny (engine demo)",
-      "description": "Runs the real kestrel-engine path (oracle fixture). Proves load→forward — not coherent English chat.",
+      "description": "Runs the real kestrel-engine path (oracle fixture). Proves load\u2192forward \u2014 not coherent English chat.",
       "size_gb": 0.01,
       "license": "Apache-2.0",
       "source": "fixture",
@@ -28,7 +32,11 @@
       "status": "ready",
       "engine": "kestrel-engine",
       "ram_gb": 1,
-      "tags": ["demo", "engine", "ready"]
+      "tags": [
+        "demo",
+        "engine",
+        "ready"
+      ]
     },
     {
       "id": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
@@ -45,24 +53,32 @@
       "status": "ready",
       "engine": "preview",
       "ram_gb": 4,
-      "tags": ["mac16", "small", "ready"]
+      "tags": [
+        "mac16",
+        "small",
+        "ready"
+      ]
     },
     {
       "id": "Qwen/Qwen2.5-0.5B-Instruct",
       "name": "Qwen2.5 0.5B Instruct",
-      "description": "Tiny Qwen2.5 for 16GB Macs. Real download (~1GB), honest local chat — not a frontier MoE stub.",
+      "description": "Tiny Qwen2.5 for 16GB Macs. Real download (~1GB), honest local chat \u2014 not a frontier MoE stub.",
       "size_gb": 1.0,
       "license": "Apache-2.0",
       "source": "hf_small",
       "hf_repo": "Qwen/Qwen2.5-0.5B-Instruct",
       "preview_repo": "Qwen/Qwen2.5-0.5B-Instruct",
-      "chat": "preview",
+      "chat": "engine",
       "family": "qwen",
       "tier": "mac16",
       "status": "ready",
-      "engine": "preview",
+      "engine": "kestrel-engine",
       "ram_gb": 2,
-      "tags": ["mac16", "small", "ready"]
+      "tags": [
+        "mac16",
+        "small",
+        "ready"
+      ]
     },
     {
       "id": "Qwen/Qwen2.5-1.5B-Instruct",
@@ -73,64 +89,81 @@
       "source": "hf_small",
       "hf_repo": "Qwen/Qwen2.5-1.5B-Instruct",
       "preview_repo": "Qwen/Qwen2.5-1.5B-Instruct",
-      "chat": "preview",
+      "chat": "engine",
       "family": "qwen",
       "tier": "mac16",
       "status": "ready",
-      "engine": "preview",
+      "engine": "kestrel-engine",
       "ram_gb": 4,
-      "tags": ["mac16", "small", "ready"]
+      "tags": [
+        "mac16",
+        "small",
+        "ready"
+      ]
     },
     {
       "id": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
       "name": "Qwen2.5 Coder 1.5B",
-      "description": "Small coding-focused Qwen2.5. Real HF weights (~3GB), Mac 16GB friendly.",
+      "description": "Small coding-focused Qwen2.5. Real HF weights (~3GB); runs on kestrel-engine dense path (Mac 16GB).",
       "size_gb": 3.1,
       "license": "Apache-2.0",
       "source": "hf_small",
       "hf_repo": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
       "preview_repo": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
-      "chat": "preview",
+      "chat": "engine",
       "family": "qwen",
       "tier": "mac16",
       "status": "ready",
-      "engine": "preview",
+      "engine": "kestrel-engine",
       "ram_gb": 4,
-      "tags": ["mac16", "small", "coder", "ready"]
+      "tags": [
+        "mac16",
+        "small",
+        "coder",
+        "ready"
+      ]
     },
     {
       "id": "Qwen/Qwen2.5-3B-Instruct",
       "name": "Qwen2.5 3B Instruct",
-      "description": "Strong small Qwen2.5. ~6GB download; comfortable on M4 Air 16GB.",
+      "description": "Strong small Qwen2.5. ~6GB download; kestrel-engine dense path on M4 Air 16GB.",
       "size_gb": 6.2,
       "license": "Apache-2.0",
       "source": "hf_small",
       "hf_repo": "Qwen/Qwen2.5-3B-Instruct",
       "preview_repo": "Qwen/Qwen2.5-3B-Instruct",
-      "chat": "preview",
+      "chat": "engine",
       "family": "qwen",
       "tier": "mac16",
       "status": "ready",
-      "engine": "preview",
+      "engine": "kestrel-engine",
       "ram_gb": 8,
-      "tags": ["mac16", "small", "ready"]
+      "tags": [
+        "mac16",
+        "small",
+        "ready"
+      ]
     },
     {
       "id": "Qwen/Qwen2.5-7B-Instruct",
       "name": "Qwen2.5 7B Instruct",
-      "description": "Larger small model (~15GB). Fits 16GB Mac with float16; quit other apps. Under 20GB download.",
+      "description": "Larger Qwen2.5 (~15GB). Dense engine path (int8); quit other apps on 16GB Macs.",
       "size_gb": 15.2,
       "license": "Apache-2.0",
       "source": "hf_small",
       "hf_repo": "Qwen/Qwen2.5-7B-Instruct",
       "preview_repo": "Qwen/Qwen2.5-7B-Instruct",
-      "chat": "preview",
+      "chat": "engine",
       "family": "qwen",
       "tier": "mac16",
       "status": "ready",
-      "engine": "preview",
+      "engine": "kestrel-engine",
       "ram_gb": 14,
-      "tags": ["mac16", "small", "ready"]
+      "tags": [
+        "mac16",
+        "small",
+        "ready"
+      ]
     },
     {
       "id": "Qwen/Qwen3-0.6B",
@@ -147,7 +180,11 @@
       "status": "ready",
       "engine": "preview",
       "ram_gb": 3,
-      "tags": ["mac16", "small", "ready"]
+      "tags": [
+        "mac16",
+        "small",
+        "ready"
+      ]
     },
     {
       "id": "Qwen/Qwen3-1.7B",
@@ -164,7 +201,11 @@
       "status": "ready",
       "engine": "preview",
       "ram_gb": 5,
-      "tags": ["mac16", "small", "ready"]
+      "tags": [
+        "mac16",
+        "small",
+        "ready"
+      ]
     },
     {
       "id": "Qwen/Qwen3-4B",
@@ -181,7 +222,11 @@
       "status": "ready",
       "engine": "preview",
       "ram_gb": 10,
-      "tags": ["mac16", "small", "ready"]
+      "tags": [
+        "mac16",
+        "small",
+        "ready"
+      ]
     },
     {
       "id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
@@ -198,7 +243,11 @@
       "status": "ready",
       "engine": "preview",
       "ram_gb": 3,
-      "tags": ["mac16", "small", "ready"]
+      "tags": [
+        "mac16",
+        "small",
+        "ready"
+      ]
     },
     {
       "id": "microsoft/Phi-3.5-mini-instruct",
@@ -215,7 +264,12 @@
       "status": "ready",
       "engine": "preview",
       "ram_gb": 10,
-      "tags": ["mac16", "small", "phi", "ready"]
+      "tags": [
+        "mac16",
+        "small",
+        "phi",
+        "ready"
+      ]
     },
     {
       "id": "google/gemma-2-2b-it",
@@ -232,7 +286,12 @@
       "status": "ready",
       "engine": "preview",
       "ram_gb": 6,
-      "tags": ["mac16", "small", "gemma", "ready"]
+      "tags": [
+        "mac16",
+        "small",
+        "gemma",
+        "ready"
+      ]
     },
     {
       "id": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
@@ -249,12 +308,16 @@
       "status": "ready",
       "engine": "preview",
       "ram_gb": 5,
-      "tags": ["mac16", "small", "ready"]
+      "tags": [
+        "mac16",
+        "small",
+        "ready"
+      ]
     },
     {
       "id": "zai-org/GLM-5.2-FP8",
       "name": "GLM-5.2",
-      "description": "Z.ai MoE+DSA. Requires full HF download (~756GB) + FP8→int4 convert before kestrel-engine chat. Not a tiny stub.",
+      "description": "Z.ai MoE+DSA. Requires full HF download (~756GB) + FP8\u2192int4 convert before kestrel-engine chat. Not a tiny stub.",
       "size_gb": 756,
       "license": "MIT",
       "hf_repo": "zai-org/GLM-5.2-FP8",
@@ -264,12 +327,16 @@
       "status": "download",
       "engine": "kestrel-engine",
       "ram_gb": 24,
-      "tags": ["moe", "dsa", "download"]
+      "tags": [
+        "moe",
+        "dsa",
+        "download"
+      ]
     },
     {
       "id": "zai-org/GLM-5.1-FP8",
       "name": "GLM-5.1",
-      "description": "Prior Z.ai MoE+DSA. Full HF download + convert required — Install will not fake a local copy.",
+      "description": "Prior Z.ai MoE+DSA. Full HF download + convert required \u2014 Install will not fake a local copy.",
       "size_gb": 700,
       "license": "MIT",
       "hf_repo": "zai-org/GLM-5.1-FP8",
@@ -279,7 +346,11 @@
       "status": "download",
       "engine": "kestrel-engine",
       "ram_gb": 24,
-      "tags": ["moe", "dsa", "download"]
+      "tags": [
+        "moe",
+        "dsa",
+        "download"
+      ]
     },
     {
       "id": "zai-org/GLM-4.7-Flash",
@@ -293,12 +364,16 @@
       "status": "download",
       "engine": "kestrel-engine",
       "ram_gb": 16,
-      "tags": ["moe", "flash", "download"]
+      "tags": [
+        "moe",
+        "flash",
+        "download"
+      ]
     },
     {
       "id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
       "name": "Qwen3 30B-A3B Instruct",
-      "description": "Real Qwen3 MoE (~60GB). Must download from HF — selecting this never runs a substitute model.",
+      "description": "Real Qwen3 MoE (~60GB). Must download from HF \u2014 selecting this never runs a substitute model.",
       "size_gb": 60,
       "license": "Apache-2.0",
       "hf_repo": "Qwen/Qwen3-30B-A3B-Instruct-2507",
@@ -307,7 +382,11 @@
       "status": "download",
       "engine": "kestrel-engine",
       "ram_gb": 16,
-      "tags": ["moe", "qwen", "download"]
+      "tags": [
+        "moe",
+        "qwen",
+        "download"
+      ]
     },
     {
       "id": "Qwen/Qwen3-235B-A22B-Instruct-2507",
@@ -321,12 +400,16 @@
       "status": "download",
       "engine": "kestrel-engine",
       "ram_gb": 48,
-      "tags": ["moe", "qwen", "download"]
+      "tags": [
+        "moe",
+        "qwen",
+        "download"
+      ]
     },
     {
       "id": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
       "name": "Qwen3 Coder 30B-A3B",
-      "description": "Qwen3 coding MoE. Download full weights — no preview impersonation.",
+      "description": "Qwen3 coding MoE. Download full weights \u2014 no preview impersonation.",
       "size_gb": 60,
       "license": "Apache-2.0",
       "hf_repo": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
@@ -335,7 +418,12 @@
       "status": "download",
       "engine": "kestrel-engine",
       "ram_gb": 16,
-      "tags": ["moe", "code", "qwen", "download"]
+      "tags": [
+        "moe",
+        "code",
+        "qwen",
+        "download"
+      ]
     },
     {
       "id": "moonshotai/Kimi-K2.7-Code",
@@ -349,12 +437,17 @@
       "status": "download",
       "engine": "kestrel-engine",
       "ram_gb": 48,
-      "tags": ["moe", "kimi", "code", "download"]
+      "tags": [
+        "moe",
+        "kimi",
+        "code",
+        "download"
+      ]
     },
     {
       "id": "moonshotai/Kimi-K2.6",
       "name": "Kimi K2.6",
-      "description": "Moonshot Kimi K2.6. Must download real weights from HF — Install without download is refused.",
+      "description": "Moonshot Kimi K2.6. Must download real weights from HF \u2014 Install without download is refused.",
       "size_gb": 600,
       "license": "Modified MIT",
       "hf_repo": "moonshotai/Kimi-K2.6",
@@ -363,7 +456,11 @@
       "status": "download",
       "engine": "kestrel-engine",
       "ram_gb": 48,
-      "tags": ["moe", "kimi", "download"]
+      "tags": [
+        "moe",
+        "kimi",
+        "download"
+      ]
     },
     {
       "id": "moonshotai/Kimi-K2-Thinking",
@@ -377,7 +474,12 @@
       "status": "download",
       "engine": "kestrel-engine",
       "ram_gb": 48,
-      "tags": ["moe", "kimi", "reasoning", "download"]
+      "tags": [
+        "moe",
+        "kimi",
+        "reasoning",
+        "download"
+      ]
     },
     {
       "id": "deepseek-ai/DeepSeek-V3.2",
@@ -391,12 +493,16 @@
       "status": "download",
       "engine": "kestrel-engine",
       "ram_gb": 32,
-      "tags": ["moe", "dsa", "download"]
+      "tags": [
+        "moe",
+        "dsa",
+        "download"
+      ]
     },
     {
       "id": "deepseek-ai/DeepSeek-V3.2-Exp",
       "name": "DeepSeek V3.2 Exp",
-      "description": "Experimental DeepSeek V3.2. Download full weights — no fake local pack.",
+      "description": "Experimental DeepSeek V3.2. Download full weights \u2014 no fake local pack.",
       "size_gb": 685,
       "license": "MIT",
       "hf_repo": "deepseek-ai/DeepSeek-V3.2-Exp",
@@ -405,7 +511,11 @@
       "status": "download",
       "engine": "kestrel-engine",
       "ram_gb": 32,
-      "tags": ["moe", "dsa", "download"]
+      "tags": [
+        "moe",
+        "dsa",
+        "download"
+      ]
     },
     {
       "id": "mistralai/Magistral-Small-2509",
@@ -419,12 +529,15 @@
       "status": "download",
       "engine": "kestrel-engine",
       "ram_gb": 16,
-      "tags": ["mistral", "download"]
+      "tags": [
+        "mistral",
+        "download"
+      ]
     },
     {
       "id": "meta-llama/Llama-4-Maverick-17B-128E-Instruct",
       "name": "Llama 4 Maverick",
-      "description": "Meta Llama 4 Maverick. Full download required — selection never substitutes another model.",
+      "description": "Meta Llama 4 Maverick. Full download required \u2014 selection never substitutes another model.",
       "size_gb": 80,
       "license": "Llama",
       "hf_repo": "meta-llama/Llama-4-Maverick-17B-128E-Instruct",
@@ -433,7 +546,11 @@
       "status": "download",
       "engine": "kestrel-engine",
       "ram_gb": 24,
-      "tags": ["moe", "llama", "download"]
+      "tags": [
+        "moe",
+        "llama",
+        "download"
+      ]
     },
     {
       "id": "meta-llama/Llama-4-Scout-17B-16E-Instruct",
@@ -447,7 +564,11 @@
       "status": "download",
       "engine": "kestrel-engine",
       "ram_gb": 20,
-      "tags": ["moe", "llama", "download"]
+      "tags": [
+        "moe",
+        "llama",
+        "download"
+      ]
     }
   ]
 }
