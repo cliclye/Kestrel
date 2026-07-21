@@ -34,12 +34,23 @@ CFLAGS += -DWH_SME -march=armv8.7-a+sme2
 endif
 LDFLAGS = -lm $(OMPL)
 else
-CC      ?= gcc
-CFLAGS  = -O3 -fopenmp $(INCLUDES) -Wall -Wextra -Wno-unused-parameter -Wno-misleading-indentation -Wno-unused-function
+# Prefer clang on Linux: GCC may lack convenient _Float16/__fp16 by-value support
+# depending on target; clang 15+ handles Windhover's IEEE fp16 path cleanly.
+CC      ?= clang
+HAVE_OMP := $(shell echo '\#include <omp.h>' | $(CC) -fopenmp -E - >/dev/null 2>&1 && echo yes)
+ifeq ($(HAVE_OMP),yes)
+OMPC    = -fopenmp
+OMPL    = -fopenmp
+else
+OMPC    =
+OMPL    =
+$(warning OpenMP headers not found — building without -fopenmp)
+endif
+CFLAGS  = -O3 $(OMPC) $(INCLUDES) -Wall -Wextra -Wno-unused-parameter -Wno-misleading-indentation -Wno-unused-function
 ifneq ($(ARCH),)
 CFLAGS += -march=$(ARCH)
 endif
-LDFLAGS = -lm -lpthread
+LDFLAGS = -lm -lpthread $(OMPL)
 endif
 
 .PHONY: all clean test-oracle

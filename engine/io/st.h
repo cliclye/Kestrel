@@ -251,9 +251,6 @@ static void st_read_raw(shards *S, const char *name, void *out, int drop) {
 /* legge una FETTA di un tensore: n_elems a partire dall'elemento elem_off.
  * Serve per gli expert fusi di GLM (un tensore = blocco [E, ...]): si legge il
  * solo expert richiesto via pread del sotto-range, niente lettura dell'intero blocco. */
-/* legge una FETTA di un tensore: n_elems a partire dall'elemento elem_off.
- * Serve per gli expert fusi di GLM (un tensore = blocco [E, ...]): si legge il
- * solo expert richiesto via pread del sotto-range, niente lettura dell'intero blocco. */
 static void st_read_slice_f32(shards *S, const char *name, int64_t elem_off, int64_t n_elems, float *out, int drop) {
     st_tensor *t = st_find(S, name);
     if (!t) { fprintf(stderr, "missing tensor: %s\n", name); exit(1); }
