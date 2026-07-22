@@ -43,6 +43,16 @@ Alternatives:
 
 Intel Macs: build from source for now (see README).
 
+### Use models already installed in Ollama
+
+If you already run [Ollama](https://ollama.com) (`ollama list`), Windhover can use those models for **Chat** and **Agent** without re-downloading:
+
+1. Keep Ollama running (`ollama serve` / the Ollama app)
+2. Open Windhover → **Library** → filter **Ollama**, or pick `Ollama · …` in the Chat/Agent model menu
+3. Chat as usual — inference stays in Ollama (GGUF); Windhover does not convert them to KPK / `windhover-engine`
+
+Override the API URL with `OLLAMA_HOST` (default `http://127.0.0.1:11434`).
+
 ---
 
 ## Windows 11 (x64 + ARM64)

@@ -206,8 +206,8 @@ Numerics lineage (Apache-2.0): [UPSTREAM.md](UPSTREAM.md).
 | **KPK + mmap** | Group-int4 packs; cold weights stay on SSD |
 | **Sparse AUs** | Dense FFN bundles + MoE experts under one working-set policy |
 | **Library** | Browse / install / uninstall local packs |
-| **Chat** | Markdown streaming UI; only chat-capable installs appear |
-| **Agent** | Folder-scoped list / read / write on device |
+| **Chat** | Markdown UI; Windhover packs + Ollama models when `ollama serve` is running |
+| **Agent** | Folder-scoped tools; same model picker (Windhover or Ollama) |
 | **Advanced** | Live telemetry: RSS, latency, tok/s, sparsity, AU hit |
 | **Honest catalog** | No fake stubs for frontier MoEs |
 

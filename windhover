@@ -23,6 +23,8 @@ import tempfile
 import threading
 import time
 import uuid
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -72,6 +74,7 @@ MODELS_DIR = _models_dir()
 CATALOG_PATH = ROOT / "app" / "public" / "catalog.json"
 C_DIR = ROOT / "c"  # reference: openai_server, resource_plan, convert
 PREVIEW_REPO = os.environ.get("WINDHOVER_PREVIEW_MODEL", os.environ.get("KESTREL_PREVIEW_MODEL", "HuggingFaceTB/SmolLM2-360M-Instruct"))
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
 _PREVIEW_PIPES: dict[str, tuple] = {}
 _PULL_JOBS: dict[str, dict] = {}
 _PULL_LOCK = threading.Lock()
@@ -640,12 +643,13 @@ def _engine_chat(
 
 def _agent_run(
     *,
-    snap: Path,
+    snap: Path | None,
     workspace: Path,
     prompt: str,
     max_steps: int = 8,
     max_tokens: int = 256,
     temperature: float = 0.2,
+    ollama_model: str | None = None,
 ) -> dict:
     """Host-side tool loop: local LLM proposes tools; we execute under workspace."""
     if _agent_ws is None:
@@ -653,11 +657,17 @@ def _agent_run(
     root = workspace.resolve()
     if not root.is_dir():
         return {"ok": False, "error": f"workspace not a directory: {root}"}
-    mode = _chat_mode(snap)
-    if mode == "blocked":
-        return {"ok": False, "error": "model is a fake stub — uninstall it"}
-    if mode not in ("preview", "engine", "engine-oracle"):
-        return {"ok": False, "error": f"model not chat-capable (mode={mode})"}
+
+    if ollama_model:
+        mode = "ollama"
+    else:
+        if snap is None or not snap.is_dir():
+            return {"ok": False, "error": "model not installed"}
+        mode = _chat_mode(snap)
+        if mode == "blocked":
+            return {"ok": False, "error": "model is a fake stub — uninstall it"}
+        if mode not in ("preview", "engine", "engine-oracle"):
+            return {"ok": False, "error": f"model not chat-capable (mode={mode})"}
 
     steps: list[dict] = []
     tool_results: list[dict] = []
@@ -699,7 +709,11 @@ def _agent_run(
                     ),
                 }
             )
-        if mode == "preview":
+        if mode == "ollama":
+            text, stats = _ollama_chat(
+                messages, max_tokens, temperature, model_tag=str(ollama_model)
+            )
+        elif mode == "preview":
             text, stats = _preview_chat(messages, max_tokens, temperature, snap=snap)
         else:
             flat = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
@@ -758,10 +772,14 @@ def _agent_run(
         if finished:
             break
 
+    if ollama_model:
+        model_id = f"ollama/{ollama_model}"
+    else:
+        model_id = _snap_meta(snap).get("id") or (snap.name if snap else None)
     return {
         "ok": True,
         "workspace": str(root),
-        "model": _snap_meta(snap).get("id") or snap.name,
+        "model": model_id,
         "steps": steps,
         "summary": final_summary or last_text[:2000],
         "step_count": len(steps),
@@ -1315,6 +1333,8 @@ def cmd_purge_impostors(_: argparse.Namespace) -> int:
     """Remove tiny stubs / empty marker packs that were falsely labeled as real models."""
     n = 0
     for meta in list(_list_installed()):
+        if meta.get("source") == "ollama" or str(meta.get("id") or "").startswith("ollama/"):
+            continue
         path = Path(meta.get("path") or "")
         if path.is_dir() and _is_impostor_pack(path):
             print(f"purging impostor pack: {meta.get('id')} → {path}")
@@ -1322,6 +1342,178 @@ def cmd_purge_impostors(_: argparse.Namespace) -> int:
             n += 1
     print(f"purged {n} impostor pack(s)")
     return 0
+
+
+def _is_ollama_model_id(model_id: str | None) -> bool:
+    return bool(model_id) and str(model_id).startswith("ollama/")
+
+
+def _ollama_tag(model_id: str) -> str:
+    """ollama/gemma4:latest → gemma4:latest"""
+    return str(model_id)[len("ollama/") :].strip()
+
+
+def _ollama_url(path: str) -> str:
+    if not path.startswith("/"):
+        path = "/" + path
+    return f"{OLLAMA_HOST}{path}"
+
+
+def _ollama_reachable(timeout: float = 0.6) -> bool:
+    try:
+        req = urllib.request.Request(_ollama_url("/api/tags"), method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return 200 <= getattr(resp, "status", 200) < 300
+    except Exception:
+        return False
+
+
+def _ollama_list_models(timeout: float = 1.5) -> list[dict]:
+    """Return virtual installed entries for models already pulled into Ollama."""
+    try:
+        req = urllib.request.Request(_ollama_url("/api/tags"), method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return []
+    out: list[dict] = []
+    for m in data.get("models") or []:
+        name = str(m.get("name") or m.get("model") or "").strip()
+        if not name:
+            continue
+        size = int(m.get("size") or 0)
+        details = m.get("details") or {}
+        out.append(
+            {
+                "id": f"ollama/{name}",
+                "name": name,
+                "path": None,
+                "ready": True,
+                "engine": "ollama",
+                "source": "ollama",
+                "backend": "ollama",
+                "chat": "ollama",
+                "chat_mode": "ollama",
+                "chat_ok": True,
+                "impostor": False,
+                "has_weights": True,
+                "size_bytes": size,
+                "weight_bytes": size,
+                "family": "ollama",
+                "description": f"Local Ollama model ({name})",
+                "ollama_digest": m.get("digest"),
+                "ollama_modified": m.get("modified_at") or m.get("modified"),
+                "parameter_size": details.get("parameter_size"),
+                "quantization": details.get("quantization_level"),
+            }
+        )
+    out.sort(key=lambda x: str(x.get("id") or ""))
+    return out
+
+
+def _ollama_chat(
+    messages: list,
+    max_tokens: int,
+    temperature: float,
+    *,
+    model_tag: str,
+) -> tuple[str, dict]:
+    """Proxy chat to the local Ollama OpenAI-compatible API."""
+    t0 = time.time()
+    clean_msgs = [
+        {"role": m.get("role") or "user", "content": m.get("content") or ""}
+        for m in messages
+        if (m.get("content") or "").strip() or (m.get("role") in ("assistant", "system"))
+    ]
+    text = ""
+    err: str | None = None
+    completion_tokens = 0
+    attempts = (
+        (
+            "/v1/chat/completions",
+            {
+                "model": model_tag,
+                "messages": clean_msgs,
+                "stream": False,
+                "temperature": float(temperature),
+                "max_tokens": int(max_tokens),
+            },
+        ),
+        (
+            "/api/chat",
+            {
+                "model": model_tag,
+                "messages": clean_msgs,
+                "stream": False,
+                "options": {
+                    "temperature": float(temperature),
+                    "num_predict": int(max_tokens),
+                },
+            },
+        ),
+    )
+    for path, payload in attempts:
+        body = json.dumps(payload).encode("utf-8")
+        try:
+            req = urllib.request.Request(
+                _ollama_url(path),
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                raw = json.loads(resp.read().decode("utf-8", errors="replace"))
+            if path.startswith("/v1/"):
+                choices = raw.get("choices") or []
+                if choices:
+                    msg = choices[0].get("message") or {}
+                    text = str(msg.get("content") or "")
+                usage = raw.get("usage") or {}
+                completion_tokens = int(usage.get("completion_tokens") or 0)
+            else:
+                msg = raw.get("message") or {}
+                text = str(msg.get("content") or raw.get("response") or "")
+                completion_tokens = int(raw.get("eval_count") or 0)
+            err = None
+            break
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try:
+                detail = e.read().decode("utf-8", errors="replace")[:300]
+            except Exception:
+                pass
+            err = f"Ollama HTTP {e.code}: {e.reason}" + (f" — {detail}" if detail else "")
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"
+    dt = max(1e-6, time.time() - t0)
+    if err and not text:
+        stats = {
+            "backend": "ollama",
+            "error": err,
+            "selected_model": f"ollama/{model_tag}",
+            "preview_model": None,
+            "latency_ms": round(dt * 1000, 1),
+            "tokens_per_sec": 0.0,
+            "completion_tokens": 0,
+            "rss_mb": round(_rss_mb(), 1),
+            "engine": "ollama",
+        }
+        _LAST_STATS.update(stats)
+        return f"(ollama error: {err})", stats
+    ntok = completion_tokens if completion_tokens > 0 else max(1, len((text or "").split()))
+    stats = {
+        "backend": "ollama",
+        "selected_model": f"ollama/{model_tag}",
+        "preview_model": model_tag,
+        "family": "ollama",
+        "latency_ms": round(dt * 1000, 1),
+        "tokens_per_sec": round(ntok / dt, 2),
+        "completion_tokens": ntok,
+        "rss_mb": round(_rss_mb(), 1),
+        "engine": "ollama",
+    }
+    _LAST_STATS.update(stats)
+    return text or "(empty ollama generation)", stats
 
 
 def _list_installed() -> list[dict]:
@@ -1353,6 +1545,8 @@ def _list_installed() -> list[dict]:
             meta["chat_ok"] = False
             meta["ready"] = False
         out.append(meta)
+    # Virtual entries for models already installed in Ollama (no re-download).
+    out.extend(_ollama_list_models())
     return out
 
 
@@ -1395,6 +1589,22 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
                         "engine_on": present,
                         "rss_mb": round(_rss_mb(), 1),
                         "stats": _LAST_STATS,
+                        "ollama": {
+                            "host": OLLAMA_HOST,
+                            "reachable": _ollama_reachable(),
+                        },
+                    },
+                )
+            if path == "/api/ollama/status":
+                models = _ollama_list_models()
+                return self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "host": OLLAMA_HOST,
+                        "reachable": bool(models) or _ollama_reachable(),
+                        "models": [m.get("id") for m in models],
+                        "count": len(models),
                     },
                 )
             if path == "/v1/catalog":
@@ -1402,6 +1612,7 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
             if path == "/v1/models" or path == "/api/installed":
                 return self._json(200, {"data": _list_installed(), "object": "list"})
             if path in ("/api/stats", "/v1/stats"):
+                ollama_models = _ollama_list_models()
                 return self._json(
                     200,
                     {
@@ -1413,6 +1624,9 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
                         "installed": len(_list_installed()),
                         "last": _LAST_STATS,
                         "chat_preview": PREVIEW_REPO,
+                        "ollama_host": OLLAMA_HOST,
+                        "ollama_reachable": bool(ollama_models) or _ollama_reachable(),
+                        "ollama_models": len(ollama_models),
                     },
                 )
             if path in ("/api/jobs", "/api/pull/status"):
@@ -1623,16 +1837,35 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
                 prompt = (body.get("prompt") or body.get("message") or "").strip()
                 if not prompt:
                     return self._json(400, {"ok": False, "error": "empty prompt"})
-                snap = _resolve_model_dir(body.get("model"), model)
-                if snap is None or not snap.is_dir():
-                    return self._json(
-                        404,
-                        {
-                            "ok": False,
-                            "error": "Model not installed. Install Chat Preview or a Mac 16GB coder from Library.",
-                        },
-                    )
-                # Persist workspace if provided in body
+                requested = body.get("model")
+                ollama_tag = None
+                snap = None
+                if _is_ollama_model_id(requested):
+                    ollama_tag = _ollama_tag(str(requested))
+                    if not _ollama_reachable():
+                        return self._json(
+                            503,
+                            {
+                                "ok": False,
+                                "error": (
+                                    f"Ollama is not reachable at {OLLAMA_HOST}. "
+                                    "Start it with `ollama serve`, then retry."
+                                ),
+                            },
+                        )
+                else:
+                    snap = _resolve_model_dir(requested, model)
+                    if snap is None or not snap.is_dir():
+                        return self._json(
+                            404,
+                            {
+                                "ok": False,
+                                "error": (
+                                    "Model not installed. Install Chat Preview / a Mac 16GB coder "
+                                    "from Library, or select an Ollama model (ollama/…)."
+                                ),
+                            },
+                        )
                 try:
                     info = _agent_ws.set_workspace(str(root_s))
                     _WORKSPACE["root"] = info["root"]
@@ -1648,22 +1881,79 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
                     max_steps=max_steps,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    ollama_model=ollama_tag,
                 )
                 code = 200 if result.get("ok") else 400
                 return self._json(code, result)
             if path in ("/v1/chat/completions", "/api/chat"):
-                snap = _resolve_model_dir(body.get("model"), model)
                 requested = body.get("model")
+                messages = body.get("messages") or []
+                if not any((m.get("content") or "").strip() for m in messages if m.get("role") == "user"):
+                    return self._json(400, {"error": "empty prompt"})
+                max_tokens = int(body.get("max_tokens") or 128)
+                temperature = float(
+                    body.get("temperature") if body.get("temperature") is not None else 0.7
+                )
+                want_stream = bool(body.get("stream"))
+
+                if _is_ollama_model_id(requested):
+                    if want_stream:
+                        return self._json(
+                            400,
+                            {"error": "streaming not supported for Ollama bridge yet — set stream=false"},
+                        )
+                    if not _ollama_reachable():
+                        return self._json(
+                            503,
+                            {
+                                "error": (
+                                    f"Ollama is not reachable at {OLLAMA_HOST}. "
+                                    "Start it with `ollama serve` to use preinstalled models."
+                                ),
+                                "requested": requested,
+                            },
+                        )
+                    tag = _ollama_tag(str(requested))
+                    text, stats = _ollama_chat(messages, max_tokens, temperature, model_tag=tag)
+                    if stats.get("error") and str(text).startswith("(ollama error:"):
+                        return self._json(502, {"error": stats["error"], "requested": requested})
+                    mid_ = f"ollama/{tag}"
+                    return self._json(
+                        200,
+                        {
+                            "id": f"chatcmpl-ollama-{uuid.uuid4().hex[:10]}",
+                            "object": "chat.completion",
+                            "created": int(time.time()),
+                            "model": mid_,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "message": {"role": "assistant", "content": text},
+                                    "finish_reason": "stop",
+                                }
+                            ],
+                            "usage": {
+                                "completion_tokens": stats.get("completion_tokens") or 0,
+                                "prompt_tokens": 0,
+                                "total_tokens": stats.get("completion_tokens") or 0,
+                            },
+                            "windhover": stats,
+                        },
+                    )
+
+                snap = _resolve_model_dir(requested, model)
                 if snap is None or not snap.is_dir():
                     return self._json(
                         404 if requested and requested not in ("kestrel", "default", "auto") else 503,
                         {
                             "error": (
                                 f"Model {requested!r} is not installed. "
-                                "Install **Windhover Chat Preview** for local chat, or "
-                                "Download weights for that catalog id (real HF download — no stubs)."
+                                "Install **Windhover Chat Preview** for local chat, "
+                                "Download weights from Library, or pick an **Ollama** model "
+                                "(shown when `ollama serve` is running)."
                                 if requested and requested not in ("kestrel", "default", "auto", None)
-                                else "No model loaded. Install **Windhover Chat Preview** from Library."
+                                else "No model loaded. Install **Windhover Chat Preview** from Library, "
+                                "or start Ollama to use preinstalled models."
                             ),
                             "requested": requested,
                         },
@@ -1683,14 +1973,6 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
                             "id": mid,
                         },
                     )
-                messages = body.get("messages") or []
-                if not any((m.get("content") or "").strip() for m in messages if m.get("role") == "user"):
-                    return self._json(400, {"error": "empty prompt"})
-                max_tokens = int(body.get("max_tokens") or 128)
-                temperature = float(
-                    body.get("temperature") if body.get("temperature") is not None else 0.7
-                )
-                want_stream = bool(body.get("stream"))
                 stats: dict = {}
                 if mode == "preview":
                     text, stats = _preview_chat(messages, max_tokens, temperature, snap=snap)

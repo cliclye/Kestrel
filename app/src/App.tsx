@@ -22,7 +22,7 @@ type CatalogModel = {
 
 type Installed = {
   id: string;
-  path?: string;
+  path?: string | null;
   name?: string;
   ready?: boolean;
   engine?: string;
@@ -33,6 +33,9 @@ type Installed = {
   size_bytes?: number;
   weight_bytes?: number;
   has_weights?: boolean;
+  source?: string;
+  backend?: string;
+  description?: string;
 };
 
 type Msg = {
@@ -126,6 +129,7 @@ function toolActivityGroup(results: AgentToolResult[]): string {
 
 const FAMILIES = [
   { id: "all", label: "All" },
+  { id: "ollama", label: "Ollama" },
   { id: "mac", label: "Mac 16GB" },
   { id: "windhover", label: "Windhover" },
   { id: "glm", label: "GLM" },
@@ -141,6 +145,20 @@ function matchInstalled(list: Installed[], id: string) {
   return list.find(
     (m) => m.id === id || m.id === key || m.id?.endsWith(id.split("/").pop() || "")
   );
+}
+
+function isOllamaModel(m: { id?: string; source?: string; backend?: string; chat_mode?: string }) {
+  return (
+    m.source === "ollama" ||
+    m.backend === "ollama" ||
+    m.chat_mode === "ollama" ||
+    String(m.id || "").startsWith("ollama/")
+  );
+}
+
+function modelPickerLabel(m: Installed) {
+  const name = m.name || m.id;
+  return isOllamaModel(m) ? `Ollama · ${name.replace(/^ollama\//, "")}` : name;
 }
 
 function isMacSmall(m: CatalogModel) {
@@ -253,6 +271,11 @@ export function App() {
     [installed]
   );
 
+  const ollamaInstalled = useMemo(
+    () => installed.filter((m) => isOllamaModel(m) && m.chat_ok),
+    [installed]
+  );
+
   async function refresh() {
     try {
       const health = await fetch(apiUrl("/health")).then((r) => r.json());
@@ -314,6 +337,7 @@ export function App() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
+    if (family === "ollama") return [];
     return catalog.filter((m) => {
       if (family === "mac") {
         if (!isMacSmall(m) && m.id !== "windhover/chat-preview") return false;
@@ -325,6 +349,16 @@ export function App() {
       return hay.includes(q);
     });
   }, [catalog, family, query]);
+
+  const filteredOllama = useMemo(() => {
+    if (family !== "all" && family !== "ollama") return [];
+    const q = query.trim().toLowerCase();
+    return ollamaInstalled.filter((m) => {
+      if (!q) return true;
+      const hay = `${m.name || ""} ${m.id} ${m.description || ""}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [ollamaInstalled, family, query]);
 
   const activeMeta = useMemo(
     () => matchInstalled(chatCapable, activeModel) || chatCapable[0],
@@ -781,7 +815,15 @@ export function App() {
                 </label>
               </div>
 
-              {status ? <p className="status">{status}</p> : <p className="status muted">{filtered.length} models</p>}
+              {status ? (
+                <p className="status">{status}</p>
+              ) : (
+                <p className="status muted">
+                  {family === "ollama"
+                    ? `${filteredOllama.length} Ollama model${filteredOllama.length === 1 ? "" : "s"}`
+                    : `${filtered.length} catalog · ${filteredOllama.length} Ollama`}
+                </p>
+              )}
               {progress ? (
                 <div className="progress global-progress" aria-live="polite">
                   <div className="progress-track">
@@ -794,6 +836,67 @@ export function App() {
                 </div>
               ) : null}
 
+              {filteredOllama.length ? (
+                <div className="ollama-block">
+                  <div className="ollama-head">
+                    <h2 className="ollama-title">Ollama (already on this machine)</h2>
+                    <p className="ollama-note">
+                      These run through your local Ollama server — not windhover-engine. No re-download.
+                    </p>
+                  </div>
+                  <ul className="model-list">
+                    {filteredOllama.map((m, idx) => (
+                      <li
+                        key={m.id}
+                        className="model-row status-ollama"
+                        style={{ animationDelay: `${Math.min(idx, 12) * 40}ms` }}
+                      >
+                        <div className="model-main">
+                          <div className="model-title">
+                            <h2>{(m.name || m.id).replace(/^ollama\//, "")}</h2>
+                            <span className="badge ollama">Ollama</span>
+                          </div>
+                          <p>{m.description || "Preinstalled via Ollama"}</p>
+                          <div className="meta">
+                            <span>OLLAMA</span>
+                            {m.size_bytes ? <span>{(m.size_bytes / 1e9).toFixed(1)} GB</span> : null}
+                            <span>chat ready</span>
+                          </div>
+                        </div>
+                        <div className="model-actions">
+                          <button
+                            type="button"
+                            className="btn primary"
+                            onClick={() => {
+                              setActiveModel(m.id);
+                              setTab("chat");
+                            }}
+                          >
+                            Use in Chat
+                          </button>
+                          <button
+                            type="button"
+                            className="btn ghost"
+                            onClick={() => {
+                              setActiveModel(m.id);
+                              setTab("agent");
+                            }}
+                          >
+                            Use in Agent
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : family === "ollama" ? (
+                <p className="status muted">
+                  No Ollama models detected. Start Ollama (<code>ollama serve</code>) and pull a model
+                  (<code>ollama pull …</code>), then refresh.
+                </p>
+              ) : null}
+
+              {family !== "ollama" ? (
               <ul className="model-list">
                 {filtered.map((m, idx) => {
                   const got = !!matchInstalled(installed, m.id);
@@ -887,6 +990,7 @@ export function App() {
                   );
                 })}
               </ul>
+              ) : null}
             </section>
           </>
         ) : null}
@@ -899,13 +1003,15 @@ export function App() {
                 <p>
                   {activeMeta
                     ? `Using ${activeMeta.name || activeMeta.id}${
-                        activeMeta.chat_mode === "preview"
-                          ? " · honest SmolLM2 preview (not a frontier MoE)"
-                          : activeMeta.chat_mode === "engine-oracle"
-                            ? " · engine oracle demo"
-                            : ""
+                        isOllamaModel(activeMeta)
+                          ? " · via Ollama (not windhover-engine)"
+                          : activeMeta.chat_mode === "preview"
+                            ? " · honest SmolLM2 preview (not a frontier MoE)"
+                            : activeMeta.chat_mode === "engine-oracle"
+                              ? " · engine oracle demo"
+                              : ""
                       }`
-                    : "Install Windhover Chat Preview from Library"}
+                    : "Install Windhover Chat Preview from Library, or start Ollama"}
                 </p>
               </div>
               <label className="model-pick">
@@ -918,10 +1024,10 @@ export function App() {
                   }}
                   disabled={!chatCapable.length}
                 >
-                  {!chatCapable.length ? <option value="">Install Chat Preview</option> : null}
+                  {!chatCapable.length ? <option value="">Install Chat Preview or start Ollama</option> : null}
                   {chatCapable.map((m) => (
                     <option key={m.id} value={m.id}>
-                      {m.name || m.id}
+                      {modelPickerLabel(m)}
                     </option>
                   ))}
                 </select>
@@ -1013,7 +1119,7 @@ export function App() {
                   {!chatCapable.length ? <option value="">Install a model</option> : null}
                   {chatCapable.map((m) => (
                     <option key={m.id} value={m.id}>
-                      {m.name || m.id}
+                      {modelPickerLabel(m)}
                     </option>
                   ))}
                 </select>

@@ -590,6 +590,40 @@ textarea {
   border-color: rgba(125, 206, 160, 0.35);
 }
 
+.badge.ollama {
+  color: #9ec4dd;
+  border-color: rgba(100, 160, 200, 0.45);
+  background: rgba(100, 160, 200, 0.08);
+}
+
+.ollama-block {
+  margin-bottom: 1.25rem;
+}
+
+.ollama-head {
+  margin-bottom: 0.65rem;
+}
+
+.ollama-title {
+  margin: 0 0 0.25rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+.ollama-note {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.45;
+  max-width: 40rem;
+}
+
+.model-row.status-ollama {
+  border-color: rgba(100, 160, 200, 0.28);
+}
+
 .badge.mac {
   color: var(--ok);
   border-color: rgba(125, 206, 160, 0.45);
