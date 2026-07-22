@@ -65,6 +65,9 @@ type ChatStats = {
   preview_model?: string;
   family?: string;
   windhover?: WindhoverStats;
+  engine_active?: boolean;
+  engine_error?: string;
+  fallback_from?: string;
 };
 
 type PullProgress = {
@@ -609,12 +612,41 @@ export function App() {
         }),
       });
       const j = await r.json();
+      const st = (j?.stats || {}) as ChatStats;
+      if (typeof j?.engine_active === "boolean") st.engine_active = j.engine_active;
+      if (j?.code === "engine_inactive" || j?.engine_active === false) {
+        st.engine_active = false;
+        if (j?.error) st.engine_error = String(j.error);
+      }
+      if (!r.ok || j?.code === "engine_inactive") {
+        const errMsg =
+          String(j?.error || `Chat failed (${r.status})`) +
+          (j?.detail ? `\n\n${j.detail}` : "");
+        setLastStats(st);
+        setStatus(
+          j?.code === "engine_inactive" || r.status === 503
+            ? "Windhover engine is not active"
+            : String(j?.error || "Chat failed")
+        );
+        setMessages([
+          ...next,
+          {
+            role: "assistant",
+            content: errMsg,
+            stats: { ...st, engine_active: false, backend: st.backend || "error" },
+          },
+        ]);
+        void refresh();
+        return;
+      }
       const content =
         j?.choices?.[0]?.message?.content ||
         j?.error ||
         "No response.";
-      const st = (j?.stats || {}) as ChatStats;
       setLastStats(st);
+      if (st.engine_active === false || st.fallback_from) {
+        setStatus(st.engine_error || "Windhover engine inactive — reply used fallback");
+      }
       setMessages([
         ...next,
         {
@@ -626,6 +658,7 @@ export function App() {
       void refresh();
     } catch (e) {
       setMessages([...next, { role: "assistant", content: String(e) }]);
+      setStatus("Chat request failed — is Windhover running?");
     } finally {
       setSending(false);
     }
@@ -812,11 +845,29 @@ export function App() {
       ? "Windhover API unreachable"
       : enginePresent === false
         ? "API up, but windhover-engine binary missing — run ./windhover build"
-        : engineOk
-          ? "Windhover API online · windhover-engine ready"
-          : "Checking…";
+        : lastStats?.engine_active === false
+          ? lastStats.engine_error ||
+            "Last reply did not use windhover-engine — engine inactive for that turn"
+          : engineOk
+            ? "Windhover API online · windhover-engine ready"
+            : "Checking…";
   const engineState =
-    engineOk === false ? "off" : enginePresent === false ? "warn" : engineOk ? "on" : "";
+    engineOk === false
+      ? "off"
+      : enginePresent === false || lastStats?.engine_active === false
+        ? "warn"
+        : engineOk
+          ? "on"
+          : "";
+  const engineInactiveBanner =
+    engineOk === false
+      ? "Windhover API offline — open the Mac app or run ./windhover app"
+      : enginePresent === false
+        ? "Windhover engine is not active — binary missing. Run ./windhover build, then restart."
+        : lastStats?.engine_active === false
+          ? lastStats.engine_error ||
+            "Windhover engine is not active for the last reply (fallback or failure)."
+          : null;
 
   const modelSelect = (
     <select
@@ -1178,7 +1229,7 @@ export function App() {
                             type="button"
                             className="btn ghost danger"
                             disabled={isBusy}
-                            onClick={() => void uninstall(m.id, m.name, inst?.path)}
+                            onClick={() => void uninstall(m.id, m.name, inst?.path ?? undefined)}
                           >
                             {isBusy ? "Removing…" : "Remove fake"}
                           </button>
@@ -1186,10 +1237,12 @@ export function App() {
                           <button
                             type="button"
                             className="btn primary"
-                            disabled={isBusy || !!progress}
+                            disabled={isBusy || !!progress || m.status === "soon" || m.chat === "blocked"}
                             onClick={() => void pull(m, true)}
                           >
-                            {incomplete
+                            {m.status === "soon" || m.chat === "blocked"
+                              ? "Not supported yet"
+                              : incomplete
                               ? `Reinstall (~${m.size_gb} GB)`
                               : isMacSmall(m)
                                 ? `Install (~${m.size_gb} GB)`
@@ -1212,7 +1265,7 @@ export function App() {
                               type="button"
                               className="btn ghost danger"
                               disabled={isBusy}
-                              onClick={() => void uninstall(m.id, m.name, inst?.path)}
+                              onClick={() => void uninstall(m.id, m.name, inst?.path ?? undefined)}
                             >
                               {isBusy ? "Removing…" : "Uninstall"}
                             </button>
@@ -1252,9 +1305,11 @@ export function App() {
                     ? "Offline"
                     : enginePresent === false
                       ? "No binary"
-                      : engineOk
-                        ? "Engine"
-                        : "…"}
+                      : lastStats?.engine_active === false
+                        ? "Inactive"
+                        : engineOk
+                          ? "Engine"
+                          : "…"}
                 </span>
                 <span className="live-pill">
                   <em>RAM</em>
@@ -1290,6 +1345,12 @@ export function App() {
                 ) : null}
               </div>
             </header>
+            {engineInactiveBanner && tab === "chat" ? (
+              <div className="engine-banner" role="alert">
+                <strong>Engine inactive</strong>
+                <span>{engineInactiveBanner}</span>
+              </div>
+            ) : null}
             <div className="thread work-scroll" ref={threadRef}>
               {messages.length === 0 && !sending ? (
                 <div className="empty">

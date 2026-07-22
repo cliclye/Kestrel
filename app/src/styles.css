@@ -115,6 +115,27 @@ button:disabled {
   app-region: no-drag;
 }
 
+.engine-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem 0.75rem;
+  padding: 0.55rem 1.25rem;
+  border-bottom: 1px solid rgba(196, 120, 48, 0.35);
+  background: rgba(196, 120, 48, 0.12);
+  color: #f0d2a8;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.engine-banner strong {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #e8b86a;
+}
+
 .traffic-spacer {
   width: 68px;
   flex-shrink: 0;
@@ -449,10 +470,29 @@ button:disabled {
 
 .work-pane {
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto auto 1fr auto;
   min-height: 0;
   height: 100%;
   overflow: hidden;
+}
+
+.work-pane > .session-bar {
+  grid-row: 1;
+}
+
+.work-pane > .engine-banner {
+  grid-row: 2;
+}
+
+.work-pane > .work-scroll,
+.work-pane > .thread {
+  grid-row: 3;
+  min-height: 0;
+}
+
+.work-pane > .composer-dock,
+.work-pane > .composer {
+  grid-row: 4;
 }
 
 .session-bar {

@@ -1,6 +1,6 @@
 [package]
 name = "kestrel-desktop"
-version = "0.3.0"
+version = "0.3.1"
 description = "Windhover — native desktop app for local LLM inference"
 authors = ["Vexilo"]
 edition = "2021"

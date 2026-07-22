@@ -436,6 +436,14 @@ def _engine_faithful(snap: Path) -> bool:
     return True
 
 
+class EngineInactiveError(RuntimeError):
+    """windhover-engine binary missing, crash, or refused to run."""
+
+    def __init__(self, message: str, *, detail: str | None = None):
+        super().__init__(message)
+        self.detail = (detail or "").strip() or None
+
+
 def _looks_like_engine_garbage(text: str) -> bool:
     """Heuristic for degenerate engine decode (nulls, hex soup, phrase loops)."""
     import re
@@ -457,6 +465,20 @@ def _looks_like_engine_garbage(text: str) -> bool:
     if len(t) > 40 and weird / len(t) > 0.05:
         return True
     return False
+
+
+def _engine_inactive_payload(message: str, *, detail: str | None = None) -> dict:
+    """JSON body when Chat/Agent cannot use windhover-engine."""
+    out = {
+        "error": message,
+        "code": "engine_inactive",
+        "engine_active": False,
+        "engine": str(ENGINE_BIN),
+        "engine_present": ENGINE_BIN.is_file(),
+    }
+    if detail:
+        out["detail"] = detail[:2000]
+    return out
 
 
 def _has_kpk(snap: Path) -> bool:
@@ -727,6 +749,13 @@ def _engine_chat(
 ) -> tuple[str, dict]:
     import time
 
+    if not ENGINE_BIN.is_file():
+        raise EngineInactiveError(
+            "Windhover engine is not active — binary missing. "
+            "Build it with `./windhover build`, then restart the app.",
+            detail=f"expected {ENGINE_BIN}",
+        )
+
     t0 = time.perf_counter()
     formatted = _format_engine_prompt(snap, messages, prompt)
     env = _engine_env(snap, None)
@@ -745,51 +774,62 @@ def _engine_chat(
     def _dec(b: bytes) -> str:
         return (b or b"").decode("utf-8", errors="replace").strip()
 
-    if on_delta is None:
-        p = subprocess.run(
-            [str(ENGINE_BIN), "64", "4", "4"],
-            cwd=str(ENGINE_DIR),
-            env=env,
-            capture_output=True,
-        )
-        raw_out, err, rc = p.stdout, _dec(p.stderr), p.returncode
-    else:
-        # stream stdout bytes to the client as they arrive
-        proc = subprocess.Popen(
-            [str(ENGINE_BIN), "64", "4", "4"],
-            cwd=str(ENGINE_DIR),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        chunks: list[bytes] = []
-        pending = b""
-        while True:
-            b = proc.stdout.read(64)
-            if not b:
-                break
-            chunks.append(b)
-            pending += b
-            # hold back a partial UTF-8 tail and anything after the stats marker
-            if b"@@WH_STATS@@" in pending:
-                emit, _, _ = pending.partition(b"@@WH_STATS@@")
-                pending = b""
-            else:
-                emit, pending = pending, b""
-                for back in range(1, min(4, len(emit)) + 1):
-                    if emit[-back] & 0xC0 == 0xC0:  # UTF-8 lead byte in the tail
-                        pending = emit[-back:]
-                        emit = emit[:-back]
-                        break
-            if emit:
-                try:
-                    on_delta(_clean_chat_text(emit.decode("utf-8", errors="replace"), soft=True))
-                except Exception:
-                    proc.kill()
-                    raise
-        raw_out = b"".join(chunks)
-        err = _dec(proc.stderr.read())
-        rc = proc.wait()
+    try:
+        if on_delta is None:
+            p = subprocess.run(
+                [str(ENGINE_BIN), "64", "4", "4"],
+                cwd=str(ENGINE_DIR),
+                env=env,
+                capture_output=True,
+            )
+            raw_out, err, rc = p.stdout, _dec(p.stderr), p.returncode
+        else:
+            # stream stdout bytes to the client as they arrive
+            proc = subprocess.Popen(
+                [str(ENGINE_BIN), "64", "4", "4"],
+                cwd=str(ENGINE_DIR),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            chunks: list[bytes] = []
+            pending = b""
+            while True:
+                b = proc.stdout.read(64)
+                if not b:
+                    break
+                chunks.append(b)
+                pending += b
+                # hold back a partial UTF-8 tail and anything after the stats marker
+                if b"@@WH_STATS@@" in pending:
+                    emit, _, _ = pending.partition(b"@@WH_STATS@@")
+                    pending = b""
+                else:
+                    emit, pending = pending, b""
+                    for back in range(1, min(4, len(emit)) + 1):
+                        if emit[-back] & 0xC0 == 0xC0:  # UTF-8 lead byte in the tail
+                            pending = emit[-back:]
+                            emit = emit[:-back]
+                            break
+                if emit:
+                    try:
+                        on_delta(_clean_chat_text(emit.decode("utf-8", errors="replace"), soft=True))
+                    except Exception:
+                        proc.kill()
+                        raise
+            raw_out = b"".join(chunks)
+            err = _dec(proc.stderr.read())
+            rc = proc.wait()
+    except FileNotFoundError as e:
+        raise EngineInactiveError(
+            "Windhover engine is not active — could not start windhover-engine.",
+            detail=str(e),
+        ) from e
+    except OSError as e:
+        raise EngineInactiveError(
+            "Windhover engine is not active — failed to launch windhover-engine.",
+            detail=str(e),
+        ) from e
 
     text = _dec(raw_out)
     if "@@WH_STATS@@" in text:
@@ -800,23 +840,23 @@ def _engine_chat(
             wh_stats = {}
     text = _clean_chat_text(text)
 
-    class _P:  # keep the legacy field names below working
-        returncode = rc
-    p = _P()
     elapsed = max(time.perf_counter() - t0, 1e-6)
     meta = _snap_meta(snap)
+    # Hard failure: process crashed / refused — surface as engine inactive.
+    if rc != 0:
+        detail = err or f"exit code {rc}"
+        raise EngineInactiveError(
+            "Windhover engine is not active — the engine process failed while "
+            "running this model. Rebuild with `./windhover build`, re-convert "
+            "the pack (`./windhover convert …`), or pick another Library model.",
+            detail=detail[:2000],
+        )
     # Never surface engine stderr logs as the chat answer.
     if not text:
-        if p.returncode != 0:
-            text = (
-                "The engine failed to generate a reply for this pack. "
-                "Try another installed Hugging Face model, or re-install from Library."
-            )
-        else:
-            text = (
-                "The model returned an empty reply. Try again with a shorter prompt, "
-                "or pick a different installed model."
-            )
+        text = (
+            "The model returned an empty reply. Try again with a shorter prompt, "
+            "or pick a different installed model."
+        )
     bad = sum(
         1
         for ch in text
@@ -834,6 +874,7 @@ def _engine_chat(
         "tokens_per_sec": wh_stats.get("decode_tok_s") or round(ntok / elapsed, 2),
         "completion_tokens": ntok,
         "backend": "windhover-engine",
+        "engine_active": True,
         "selected_model": meta.get("id") or snap.name,
         "preview_model": None,
         "family": meta.get("family"),
@@ -985,10 +1026,29 @@ def _agent_run(
         elif mode == "preview":
             text, stats = _preview_chat(messages, max_tokens, temperature, snap=snap)
         else:
+            if not ENGINE_BIN.is_file():
+                return {
+                    "ok": False,
+                    "error": (
+                        "Windhover engine is not active — binary missing. "
+                        "Run `./windhover build`, then restart the app."
+                    ),
+                    "code": "engine_inactive",
+                    "engine_active": False,
+                }
             flat = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
-            text, stats = _engine_chat(
-                snap, flat[-4000:], max_tokens, temperature, messages=messages
-            )
+            try:
+                text, stats = _engine_chat(
+                    snap, flat[-4000:], max_tokens, temperature, messages=messages
+                )
+            except EngineInactiveError as e:
+                return {
+                    "ok": False,
+                    "error": str(e),
+                    "detail": e.detail,
+                    "code": "engine_inactive",
+                    "engine_active": False,
+                }
         last_text = _clean_chat_text(text or "")
 
         if _agent_ws.looks_like_format_echo(last_text, prompt) and echo_retries < 2:
@@ -1950,6 +2010,7 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
             qs = parse_qs(parsed.query)
             if path in ("/health", "/v1/health"):
                 present = ENGINE_BIN.is_file()
+                last_active = _LAST_STATS.get("engine_active")
                 return self._json(
                     200,
                     {
@@ -1957,6 +2018,7 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
                         "engine": str(ENGINE_BIN),
                         "engine_present": present,
                         "engine_on": present,
+                        "engine_active": bool(present) if last_active is None else bool(last_active and present),
                         "rss_mb": round(_rss_mb(), 1),
                         "stats": _LAST_STATS,
                         "ollama": {
@@ -2443,7 +2505,13 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
                         if m.get("role") == "user":
                             prompt = m.get("content") or ""
                     if not ENGINE_BIN.is_file():
-                        return self._json(503, {"error": "windhover-engine missing — run: windhover build"})
+                        return self._json(
+                            503,
+                            _engine_inactive_payload(
+                                "Windhover engine is not active — binary missing. "
+                                "Run `./windhover build`, then restart the app."
+                            ),
+                        )
                     if want_stream:
                         # OpenAI-style SSE: chunks as the engine emits bytes
                         mid_ = body.get("model") or _snap_meta(snap).get("id") or snap.name
@@ -2486,31 +2554,73 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
                             })
                             self.wfile.write(b"data: [DONE]\n\n")
                             self.wfile.flush()
+                        except EngineInactiveError as e:
+                            _sse({
+                                "id": "kestrel-chat",
+                                "object": "chat.completion.chunk",
+                                "model": mid_,
+                                "error": str(e),
+                                "code": "engine_inactive",
+                                "engine_active": False,
+                                "detail": e.detail,
+                                "choices": [{"index": 0, "delta": {},
+                                             "finish_reason": "error"}],
+                            })
+                            self.wfile.write(b"data: [DONE]\n\n")
+                            try:
+                                self.wfile.flush()
+                            except (BrokenPipeError, ConnectionResetError):
+                                pass
                         except (BrokenPipeError, ConnectionResetError):
                             pass
                         return None
-                    text, stats = _engine_chat(
-                        snap, prompt, max_tokens, temperature, messages=messages
-                    )
-                    backend = "windhover-engine"
+                    try:
+                        text, stats = _engine_chat(
+                            snap, prompt, max_tokens, temperature, messages=messages
+                        )
+                        backend = "windhover-engine"
+                    except EngineInactiveError as e:
+                        return self._json(
+                            503,
+                            _engine_inactive_payload(str(e), detail=e.detail),
+                        )
                     # If KPK/engine path produced no usable answer but HF weights exist,
-                    # fall back to transformers so Chat still works.
+                    # fall back to transformers so Chat still works — but mark engine inactive.
                     bad_eng = (
                         not (text or "").strip()
-                        or str(text).startswith("The engine failed")
                         or str(text).startswith("The model returned an empty")
                         or str(text).startswith("windhover-engine ran this pack")
                         or _looks_like_engine_garbage(str(text))
                     )
                     if bad_eng and _has_real_weights(snap):
                         sys.stderr.write(
-                            "[windhover] engine reply unusable — falling back to transformers\n"
+                            "[windhover] engine reply unusable — falling back to transformers "
+                            "(engine inactive for this turn)\n"
+                        )
+                        eng_err = (
+                            "Windhover engine is not active for this reply — "
+                            "output was unusable, using transformers fallback."
                         )
                         text, stats = _preview_chat(
                             messages, max_tokens, temperature, snap=snap
                         )
                         backend = "preview"
-                        stats = {**stats, "fallback_from": "windhover-engine"}
+                        stats = {
+                            **stats,
+                            "fallback_from": "windhover-engine",
+                            "engine_active": False,
+                            "engine_error": eng_err,
+                        }
+                        _LAST_STATS.update(stats)
+                    elif bad_eng:
+                        return self._json(
+                            503,
+                            _engine_inactive_payload(
+                                "Windhover engine is not active — the model produced no usable "
+                                "reply and there are no Hugging Face weights to fall back on. "
+                                "Re-install from Library or re-convert the pack."
+                            ),
+                        )
                 return self._json(
                     200,
                     {
@@ -2518,6 +2628,7 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
                         "object": "chat.completion",
                         "model": body.get("model") or _snap_meta(snap).get("id") or snap.name,
                         "backend": backend,
+                        "engine_active": bool(stats.get("engine_active", backend == "windhover-engine")),
                         "stats": stats,
                         "usage": {
                             "completion_tokens": stats.get("completion_tokens") or 0,
@@ -2673,8 +2784,22 @@ def cmd_convert(ns: argparse.Namespace) -> int:
         print(f"model not found: {ns.model}", file=sys.stderr)
         return 1
     if not _windhover_supported(snap):
-        print(f"{snap.name}: unsupported for Windhover (dense qwen2/qwen3/llama/"
-              "mistral/gemma2/gemma3/phi3 only)", file=sys.stderr)
+        cfg_mt = ""
+        try:
+            cfg_mt = str(json.loads((snap / "config.json").read_text(encoding="utf-8")).get("model_type") or "")
+        except Exception:
+            pass
+        hint = ""
+        if cfg_mt.lower() in ("qwen3_5", "qwen3.5") or "qwen3.5" in snap.name.lower():
+            hint = (
+                " Official Qwen3.5-9B is hybrid qwen3_5 (not dense). "
+                "Install Qwen/Qwen3-8B for windhover-engine int4/Q4 instead."
+            )
+        print(
+            f"{snap.name}: unsupported for Windhover (dense qwen2/qwen3/llama/"
+            f"mistral/gemma2/gemma3/phi3 only).{hint}",
+            file=sys.stderr,
+        )
         return 1
     if ns.force:
         shutil.rmtree(snap / "kpk", ignore_errors=True)

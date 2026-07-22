@@ -154,6 +154,37 @@
       "tags": ["mac16", "small", "ready"]
     },
     {
+      "id": "Qwen/Qwen3-8B",
+      "name": "Qwen3 8B · engine Q4",
+      "description": "Dense Qwen3 ~8B / 9B-class (~16GB HF → ~5GB Windhover int4 KPK). Official Qwen3.5-9B is hybrid qwen3_5 and not engine-supported yet — use this for local windhover-engine chat.",
+      "size_gb": 16.5,
+      "license": "Apache-2.0",
+      "source": "hf_small",
+      "hf_repo": "Qwen/Qwen3-8B",
+      "preview_repo": "Qwen/Qwen3-8B",
+      "chat": "engine",
+      "family": "qwen",
+      "tier": "mac16",
+      "status": "ready",
+      "engine": "windhover-engine",
+      "ram_gb": 14,
+      "tags": ["mac16", "qwen", "q4", "ready"]
+    },
+    {
+      "id": "Qwen/Qwen3.5-9B",
+      "name": "Qwen3.5 9B",
+      "description": "Official Qwen3.5-9B (qwen3_5 hybrid multimodal). Not supported by windhover-engine yet. Install “Qwen3 8B · engine Q4” for local engine int4.",
+      "size_gb": 19.0,
+      "license": "Apache-2.0",
+      "hf_repo": "Qwen/Qwen3.5-9B",
+      "preview_repo": "Qwen/Qwen3.5-9B",
+      "chat": "blocked",
+      "family": "qwen",
+      "status": "soon",
+      "ram_gb": 18,
+      "tags": ["qwen", "soon", "hybrid"]
+    },
+    {
       "id": "Qwen/Qwen2.5-7B-Instruct",
       "name": "Qwen2.5 7B Instruct",
       "description": "Larger Qwen2.5 (~15GB). Dense engine path (int8); quit other apps on 16GB Macs.",

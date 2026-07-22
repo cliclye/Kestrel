@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.1] — 2026-07-22
+
+### App / API
+- **Engine inactive errors:** missing binary, launch failure, or non-zero engine exit now return HTTP 503 with `code: engine_inactive` so Chat/Agent clearly show the engine is not active (no silent pretend-success).
+- Chat UI banner + status pill when engine binary is missing or the last reply fell back / failed.
+- Soft transformers fallback (unusable decode) still works when HF weights exist, but is marked `engine_active: false`.
+
+### Catalog
+- **Qwen3 8B · engine Q4** (`Qwen/Qwen3-8B`) — dense `qwen3`, Windhover int4/KPK path for ~9B-class local engine chat.
+- **Qwen3.5 9B** listed as `soon` / blocked: official `qwen3_5` hybrid multimodal is not supported by windhover-engine yet.
+
 ## [0.3.0] — 2026-07-22
 
 ### Highlights
