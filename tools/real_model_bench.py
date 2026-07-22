@@ -42,6 +42,10 @@ OUT = ROOT / "docs" / "real_model_bench.json"
 
 TOK_RE = re.compile(r"([\d.]+)\s*tok/s", re.I)
 POS_RE = re.compile(r"([\d.]+)\s*pos/s", re.I)
+# Prefer explicit decode lines over the first tok/s anywhere in the log.
+DECODE_TOK_RE = re.compile(
+    r"(?:\[wh\]\s+)?decode\s+([\d.]+)\s*tok/s", re.I
+)
 
 # Catalog download sizes (approx GB) — for honest refusal messages
 FRONTIER = {
@@ -104,7 +108,7 @@ def _run_once(binary: Path, snap: Path, prompt: str, ngen: int) -> dict:
     wall = time.perf_counter() - t0
     out = (p.stdout or "") + "\n" + (p.stderr or "")
     tok = None
-    m = TOK_RE.search(out) or POS_RE.search(out)
+    m = DECODE_TOK_RE.search(out) or TOK_RE.search(out) or POS_RE.search(out)
     if m:
         tok = float(m.group(1))
     return {

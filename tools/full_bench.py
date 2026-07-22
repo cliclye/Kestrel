@@ -39,10 +39,44 @@ FIXTURE_SNAP = "./fixtures/glm_tiny"
 POS_RE = re.compile(
     r"PREFILL \(teacher-forcing\) C vs oracle: (\d+)/(\d+) positions \| ([\d.]+) pos/s"
 )
+# macOS `/usr/bin/time -l` and Linux `/usr/bin/time -v`
+RSS_RE_DARWIN = re.compile(r"^\s*(\d+)\s+maximum resident set size\s*$", re.M)
+RSS_RE_LINUX = re.compile(r"Maximum resident set size \(kbytes\):\s*(\d+)", re.M)
 TIME_LINE_RE = re.compile(
     r"^\s*([\d.]+)\s+real\s+([\d.]+)\s+user\s+([\d.]+)\s+sys\s*$", re.M
 )
-RSS_RE = re.compile(r"^\s*(\d+)\s+maximum resident set size\s*$", re.M)
+TIME_USER_LINUX = re.compile(r"User time \(seconds\):\s*([\d.]+)")
+TIME_SYS_LINUX = re.compile(r"System time \(seconds\):\s*([\d.]+)")
+
+
+def _time_cmd(glm: Path) -> list[str]:
+    """External time wrapper that works on both macOS and Linux."""
+    if sys.platform == "darwin":
+        return ["/usr/bin/time", "-l", str(glm), "64", "16", "16"]
+    return ["/usr/bin/time", "-v", str(glm), "64", "16", "16"]
+
+
+def _parse_time_rss(out: str) -> tuple[int | None, float | None, float | None]:
+    rss = user = sys_ = None
+    m = RSS_RE_DARWIN.search(out)
+    if m:
+        rss = int(m.group(1))  # bytes on Darwin
+    else:
+        m = RSS_RE_LINUX.search(out)
+        if m:
+            rss = int(m.group(1)) * 1024  # kB → bytes
+    tm = TIME_LINE_RE.search(out)
+    if tm:
+        user = float(tm.group(2))
+        sys_ = float(tm.group(3))
+    else:
+        um = TIME_USER_LINUX.search(out)
+        sm = TIME_SYS_LINUX.search(out)
+        if um:
+            user = float(um.group(1))
+        if sm:
+            sys_ = float(sm.group(1))
+    return rss, user, sys_
 
 
 @dataclass
@@ -87,6 +121,7 @@ def clean_env(snap: str = "./glm_tiny") -> dict[str, str]:
         "PIPE",
         "OMP_",
         "KESTREL_",
+        "WINDHOVER_",
     )
     for k in list(env):
         if k.startswith(drop_prefixes) or k in ("TF", "SNAP"):
@@ -107,7 +142,7 @@ def sha256(path: Path) -> str:
 def run_proc(glm: Path, cwd: Path, with_time: bool, snap: str = "./glm_tiny") -> ProcResult:
     env = clean_env(snap)
     if with_time:
-        cmd = ["/usr/bin/time", "-l", str(glm), "64", "16", "16"]
+        cmd = _time_cmd(glm)
     else:
         cmd = [str(glm), "64", "16", "16"]
     p = subprocess.run(cmd, cwd=str(cwd), env=env, capture_output=True, text=True)
@@ -120,13 +155,7 @@ def run_proc(glm: Path, cwd: Path, with_time: bool, snap: str = "./glm_tiny") ->
     ok, n, pos = int(m.group(1)), int(m.group(2)), float(m.group(3))
     rss = user = sys_ = None
     if with_time:
-        rm = RSS_RE.search(out)
-        if rm:
-            rss = int(rm.group(1))
-        tm = TIME_LINE_RE.search(out)
-        if tm:
-            user = float(tm.group(2))
-            sys_ = float(tm.group(3))
+        rss, user, sys_ = _parse_time_rss(out)
     return ProcResult(ok, n, pos, rss, user, sys_)
 
 
@@ -477,7 +506,7 @@ def main() -> int:
         "comparison": comparison,
     }
 
-    out_path = ROOT / "docs" / "full_bench.json"
+    out_path = Path(os.environ.get("FULL_BENCH_OUT", str(ROOT / "docs" / "full_bench.json")))
     out_path.write_text(json.dumps(report, indent=2) + "\n")
 
     print("\n=== RESULTS (primary = mean of per-batch mean pos/s) ===")

@@ -4,10 +4,13 @@
 Measures decode-only tok/s, prefill tok/s, RSS, footprint, sparsity from
 engine stderr / @@WH_STATS@@. Never invents numbers.
 
+By default also runs stock transformers (without Windhover) on the same
+prompt for percent deltas (set WH_BENCH_WITHOUT=0 to skip).
+
   ./windhover bench --windhover
   WH_BENCH_MODELS=1.5b,7b NGEN=32 python3 tools/windhover_bench.py
 
-Writes docs/windhover_bench.json.
+Writes docs/windhover_bench.json (use WH_BENCH_OUT for Linux dumps).
 """
 from __future__ import annotations
 
@@ -21,9 +24,13 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from bench_host import host_info
+
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE = ROOT / "engine" / "windhover-engine"
-OUT = ROOT / "docs" / "windhover_bench.json"
+OUT = Path(os.environ.get("WH_BENCH_OUT", str(ROOT / "docs" / "windhover_bench.json")))
+
+
 def _models_dir():
     wh = Path.home() / ".windhover" / "models"
     ke = Path.home() / ".kestrel" / "models"
@@ -57,25 +64,7 @@ CATALOG = {
 
 
 def _host() -> dict:
-    out: dict = {"platform": sys.platform}
-    for key, flag in (
-        ("logical_cpu", "hw.logicalcpu"),
-        ("physical_cpu", "hw.physicalcpu"),
-        ("mem_bytes", "hw.memsize"),
-        ("cpu_brand", "machdep.cpu.brand_string"),
-    ):
-        try:
-            out[key] = subprocess.check_output(
-                ["sysctl", "-n", flag], text=True, timeout=2
-            ).strip()
-        except Exception:
-            pass
-    if "mem_bytes" in out:
-        try:
-            out["mem_gb"] = round(int(out["mem_bytes"]) / (1024**3), 1)
-        except Exception:
-            pass
-    return out
+    return host_info()
 
 
 def _is_kpk(snap: Path) -> bool:
@@ -98,9 +87,13 @@ def _resolve(keys: list[str]) -> dict[str, Path]:
     return found
 
 
+def _hf_root(snap: Path) -> Path:
+    return snap.parent if snap.name == "kpk" else snap
+
+
 def _chat_prompt(snap: Path, user: str) -> str:
     # Prefer HF tokenizer at parent if snap is …/kpk
-    root = snap.parent if snap.name == "kpk" else snap
+    root = _hf_root(snap)
     try:
         from transformers import AutoTokenizer
 
@@ -150,6 +143,63 @@ def _parse_wh(stderr: str, stdout: str) -> dict:
         r["decode_tok_s"] = float(dm.group(1))
         r["tokens"] = int(dm.group(2))
     return r
+
+
+def _run_without_transformers(snap: Path, prompt: str) -> dict:
+    """Decode-only tok/s via stock transformers (without Windhover)."""
+    root = _hf_root(snap)
+    code = r"""
+import json, sys, time, resource
+snap, prompt, ngen = sys.argv[1:4]
+ngen = int(ngen)
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+tok = AutoTokenizer.from_pretrained(snap, trust_remote_code=True)
+model = AutoModelForCausalLM.from_pretrained(
+    snap, torch_dtype=torch.float16, trust_remote_code=True, low_cpu_mem_usage=True
+)
+model.eval()
+inputs = tok(prompt, return_tensors="pt")
+eos = tok.eos_token_id
+with torch.inference_mode():
+    out = model(**inputs, use_cache=True)
+    past = out.past_key_values
+    next_id = torch.argmax(out.logits[:, -1, :], dim=-1, keepdim=True)
+    ids = [int(next_id.item())]
+    t_dec = time.perf_counter()
+    for _ in range(ngen - 1):
+        if eos is not None and ids[-1] == eos:
+            break
+        out = model(input_ids=next_id, past_key_values=past, use_cache=True)
+        past = out.past_key_values
+        next_id = torch.argmax(out.logits[:, -1, :], dim=-1, keepdim=True)
+        ids.append(int(next_id.item()))
+    decode_s = time.perf_counter() - t_dec
+ntok = len(ids)
+rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+rss_gb = rss / (1024**3) if sys.platform == "darwin" else rss / (1024**2)
+print(json.dumps({
+    "ok": True,
+    "path": "transformers cpu fp16",
+    "decode_tok_s": round(ntok / decode_s, 3) if decode_s > 0 else 0,
+    "tokens": ntok,
+    "rss_gb": round(rss_gb, 3),
+    "metric": "decode_only",
+}))
+"""
+    p = subprocess.run(
+        [sys.executable, "-c", code, str(root), prompt, str(NGEN)],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+    if p.returncode != 0:
+        return {"ok": False, "error": (p.stderr or p.stdout)[-800:], "rc": p.returncode}
+    try:
+        return json.loads(p.stdout.strip().splitlines()[-1])
+    except Exception as e:
+        return {"ok": False, "error": f"parse: {e}", "stdout": (p.stdout or "")[-500:]}
 
 
 def _run(snap: Path, prompt: str, *, windhover: bool) -> dict:
@@ -210,8 +260,8 @@ def main() -> int:
     snaps = _resolve(want)
     if not snaps:
         print(
-            "no KPK/SNAP packs found under ~/.kestrel/models — "
-            "run ./kestrel pull … && ./kestrel convert …",
+            "no KPK/SNAP packs found under ~/.windhover/models (or ~/.kestrel/models) — "
+            "run ./windhover pull … && ./windhover convert …",
             file=sys.stderr,
         )
         return 2
@@ -228,19 +278,39 @@ def main() -> int:
             "trials": TRIALS,
             "warmup": WARMUP,
             "metric": "decode_only from [wh] / @@WH_STATS@@",
+            "without": "transformers · CPU · float16 · greedy decode loop",
             "windhover": "default windhover-engine (KPK mmap + CATS + int8 KV)",
             "legacy": "WH=0 dense.c path when pack still loads",
         },
         "models": {},
     }
 
+    want_without = os.environ.get("WH_BENCH_WITHOUT", "1") == "1"
+    want_legacy = os.environ.get("WH_BENCH_LEGACY", "0") == "1"
+
     for key, snap in snaps.items():
         print(f"\n======== {key}  snap={snap} ========", flush=True)
         prompt = _chat_prompt(snap, PROMPT)
         wh_runs: list[dict] = []
         leg_runs: list[dict] = []
+        wo_runs: list[dict] = []
         for i in range(WARMUP + TRIALS):
             tag = "warmup" if i < WARMUP else f"trial-{i - WARMUP + 1}"
+            if want_without and (_hf_root(snap) / "config.json").is_file():
+                print(f"--- without transformers ({tag}) ---", flush=True)
+                r_wo = _run_without_transformers(snap, prompt)
+                print(
+                    json.dumps(
+                        {
+                            k: r_wo.get(k)
+                            for k in ("ok", "decode_tok_s", "rss_gb", "tokens", "error")
+                        },
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
+                if i >= WARMUP:
+                    wo_runs.append(r_wo)
             print(f"--- windhover ({tag}) ---", flush=True)
             r = _run(snap, prompt, windhover=True)
             print(
@@ -264,8 +334,7 @@ def main() -> int:
             )
             if i >= WARMUP:
                 wh_runs.append(r)
-            # legacy only when not a pure-KPK-only install (optional)
-            if os.environ.get("WH_BENCH_LEGACY", "0") == "1":
+            if want_legacy:
                 print(f"--- legacy WH=0 ({tag}) ---", flush=True)
                 r0 = _run(snap, prompt, windhover=False)
                 print(
@@ -293,6 +362,22 @@ def main() -> int:
                 "mean_sparsity_pct": _mean(wh_runs, "sparsity_pct"),
             },
         }
+        if wo_runs:
+            entry["without"] = {
+                "runs": wo_runs,
+                "mean_decode_tok_s": _mean(wo_runs, "decode_tok_s"),
+                "mean_rss_gb": _mean(wo_runs, "rss_gb"),
+            }
+            wo = entry["without"]["mean_decode_tok_s"]
+            wi = entry["windhover"]["mean_decode_tok_s"]
+            wo_rss = entry["without"]["mean_rss_gb"]
+            wi_rss = entry["windhover"]["mean_rss_gb"]
+            if wo and wi and wo > 0:
+                entry["delta_decode_pct_vs_without"] = round(100.0 * (wi - wo) / wo, 1)
+            if wo_rss and wi_rss and wo_rss > 0:
+                entry["delta_rss_pct_vs_without"] = round(
+                    100.0 * (wi_rss - wo_rss) / wo_rss, 1
+                )
         if leg_runs:
             entry["legacy"] = {
                 "runs": leg_runs,
@@ -310,13 +395,20 @@ def main() -> int:
     print(f"\nwrote {OUT}")
     for key, entry in doc["models"].items():
         wh = entry["windhover"]
-        print(
+        line = (
             f"  {key}: decode={wh['mean_decode_tok_s']} tok/s  "
             f"prefill={wh['mean_prefill_tok_s']}  "
             f"rss={wh['mean_rss_gb']} GB  "
             f"footprint={wh['mean_footprint_gb']} GB  "
             f"sparsity={wh['mean_sparsity_pct']}%"
         )
+        if "without" in entry:
+            line += (
+                f"  vs without: "
+                f"Δdecode={entry.get('delta_decode_pct_vs_without')}% "
+                f"Δrss={entry.get('delta_rss_pct_vs_without')}%"
+            )
+        print(line)
     return 0
 
 

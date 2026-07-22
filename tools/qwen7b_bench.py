@@ -24,12 +24,14 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from bench_host import host_info
+
 ROOT = Path(__file__).resolve().parents[1]
 SNAP = Path(
     os.environ.get(
         "WINDHOVER_SNAP", os.environ.get("KESTREL_SNAP",
         str(Path.home() / ".windhover" / "models" / "Qwen__Qwen2.5-7B-Instruct"),
-    )
+    ))
 )
 OUT = ROOT / "docs" / "qwen7b_bench.json"
 MODEL_ID = "Qwen/Qwen2.5-7B-Instruct"
@@ -62,25 +64,7 @@ def _rss_mb() -> float:
 
 
 def _host() -> dict:
-    out: dict = {"platform": sys.platform}
-    for key, flag in (
-        ("logical_cpu", "hw.logicalcpu"),
-        ("physical_cpu", "hw.physicalcpu"),
-        ("mem_bytes", "hw.memsize"),
-        ("cpu_brand", "machdep.cpu.brand_string"),
-    ):
-        try:
-            out[key] = subprocess.check_output(
-                ["sysctl", "-n", flag], text=True, timeout=2
-            ).strip()
-        except Exception:
-            pass
-    if "mem_bytes" in out:
-        try:
-            out["mem_gb"] = round(int(out["mem_bytes"]) / (1024**3), 1)
-        except Exception:
-            pass
-    return out
+    return host_info()
 
 
 def _engine_probe(snap: Path) -> dict:

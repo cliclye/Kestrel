@@ -49,6 +49,19 @@
 #define WH_KVG 32         /* kv quant group */
 #define WH_PREFILL_S 64   /* prefill chunk */
 #define WH_MAXS 80        /* max batch rows in scratch (prefill/verify) */
+#define WH_MAX_HD 512     /* max head_dim for stack q8 buffer */
+#define WH_MAX_HIDDEN 8192
+
+/* Portable IEEE fp16 storage. Apple Clang accepts __fp16 by value; Linux
+ * x86 Clang/GCC reject that, so prefer _Float16 when the compiler provides it. */
+#if defined(__FLT16_MAX__)
+typedef _Float16 wh_f16;
+#elif defined(__ARM_FP16_FORMAT_IEEE) || defined(__fp16)
+typedef __fp16 wh_f16;
+#else
+#error "Windhover requires IEEE fp16 (_Float16 or __fp16)"
+#endif
+
 
 /* ------------------------------------------------------------------ utils */
 
@@ -94,10 +107,10 @@ typedef struct {
     const int8_t *q8;      /* WT_I8R */
     const float *rs;       /* WT_I8R row scales (f32) */
     const uint8_t *q4;     /* WT_I4G packed nibbles (q+8) */
-    const __fp16 *sc;      /* WT_I4G group scales */
-    const __fp16 *zp;      /* WT_I4G group zeros */
+    const wh_f16 *sc;      /* WT_I4G group scales */
+    const wh_f16 *zp;      /* WT_I4G group zeros */
     const float *f;        /* WT_F32 */
-    const __fp16 *oc;      /* fp16 outlier columns [O][noc] (down^T) */
+    const wh_f16 *oc;      /* fp16 outlier columns [O][noc] (down^T) */
     const int32_t *oci;    /* outlier column indices [noc] */
     int noc;
     int64_t bytes;         /* weight+scale bytes (telemetry) */
@@ -120,7 +133,7 @@ typedef struct {
     WLayer *L;
     /* kv cache int8 g32 */
     int8_t **K8, **V8;                 /* [l] -> [kvh][max_t][hd] */
-    __fp16 **KS, **VS;                 /* [l] -> [kvh][max_t][hd/WH_KVG] */
+    wh_f16 **KS, **VS;                 /* [l] -> [kvh][max_t][hd/WH_KVG] */
     int max_t, kv_len;
     /* rope table */
     float *rope_cos, *rope_sin;        /* [max_t][hd/2] */
@@ -148,10 +161,6 @@ typedef struct {
 
 static WModel *g_wh;
 
-/* ------------------------------------------------------------ f16 helpers */
-
-static inline float f16f(__fp16 h) { return (float)h; }
-
 /* ----------------------------------------------------------- int8 kernels */
 
 static inline int32_t dot_i8i8(const int8_t *w, const int8_t *x, int I) {
@@ -174,7 +183,7 @@ static inline int32_t dot_i8i8(const int8_t *w, const int8_t *x, int I) {
 
 /* int4-g64-asym row dot with precomputed per-group activation sums:
  * y = sx * ( sum_g sc[g]*idot(q_g, xq_g) + zp[g]*xqsum[g] ) */
-static inline float dot_i4g(const uint8_t *w4, const __fp16 *sc, const __fp16 *zp,
+static inline float dot_i4g(const uint8_t *w4, const wh_f16 *sc, const wh_f16 *zp,
                             const int8_t *xq, const int32_t *xqsum, float sx, int I) {
     float acc = 0.f;
 #if defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
@@ -211,8 +220,8 @@ static inline float dot_i4g(const uint8_t *w4, const __fp16 *sc, const __fp16 *z
 }
 
 /* fused axpy: acc[d] += hj * (sc_g*q[d] + zp_g), single pass, no scratch */
-static inline void axpy_i4g_row(float *acc, const uint8_t *w4, const __fp16 *sc,
-                                const __fp16 *zp, float hj, int I) {
+static inline void axpy_i4g_row(float *acc, const uint8_t *w4, const wh_f16 *sc,
+                                const wh_f16 *zp, float hj, int I) {
 #if defined(__ARM_NEON)
     const uint8x16_t m4q = vdupq_n_u8(0x0F);
     const int8x16_t b8q = vdupq_n_s8(8);
@@ -263,7 +272,7 @@ static inline void axpy_i4g_row(float *acc, const uint8_t *w4, const __fp16 *sc,
 }
 
 /* dequant one int4-g64 row into f32 (for down^T axpy) */
-static inline void deq_i4g_row(const uint8_t *w4, const __fp16 *sc, const __fp16 *zp,
+static inline void deq_i4g_row(const uint8_t *w4, const wh_f16 *sc, const wh_f16 *zp,
                                float *out, int I) {
 #if defined(__ARM_NEON)
     const uint8x16_t m4q = vdupq_n_u8(0x0F);
@@ -422,8 +431,8 @@ static void mm_wt(const WT *w, const int8_t *xq, const float *sx,
         #pragma omp for schedule(static) nowait
         for (int o = 0; o < O; o++) {
             const uint8_t *wr = w->q4 + (int64_t)o * (I >> 1);
-            const __fp16 *sc = w->sc + (int64_t)o * ng;
-            const __fp16 *zp = w->zp + (int64_t)o * ng;
+            const wh_f16 *sc = w->sc + (int64_t)o * ng;
+            const wh_f16 *zp = w->zp + (int64_t)o * ng;
             for (int s = 0; s < S; s++)
                 y[(int64_t)s * ystride + o] =
                     dot_i4g(wr, sc, zp, xq + (int64_t)s * I, xqsum + (int64_t)s * ng, sx[s], I);
@@ -577,15 +586,15 @@ static void wt_from_view(WModel *m, const char *name, WT *w, int O, int I, int w
     if (has_s && has_z && v.nbytes == (int64_t)O * (I / 2)) {
         w->fmt = WT_I4G;
         w->q4 = (const uint8_t *)v.p;
-        w->sc = (const __fp16 *)vs.p;
-        w->zp = (const __fp16 *)vz.p;
+        w->sc = (const wh_f16 *)vs.p;
+        w->zp = (const wh_f16 *)vz.p;
         w->bytes = v.nbytes + vs.nbytes + vz.nbytes;
         st_view vo, voi;
         snprintf(nm, sizeof(nm), "%s.oc", name);
         if (st_view_get(&m->S, nm, &vo)) {
             snprintf(nm, sizeof(nm), "%s.oci", name);
             if (st_view_get(&m->S, nm, &voi)) {
-                w->oc = (const __fp16 *)vo.p;
+                w->oc = (const wh_f16 *)vo.p;
                 w->oci = (const int32_t *)voi.p;
                 w->noc = (int)voi.numel;
                 w->bytes += vo.nbytes + voi.nbytes;
@@ -705,6 +714,20 @@ static void wh_model_init(WModel *m, const char *snap) {
     st_init(&m->S, snap);
     WhDesc *d = &m->d;
     int D = d->hidden, I = d->inter, H = d->heads, KV = d->kv_heads, hd = d->head_dim;
+    if (KV <= 0 || H % KV != 0) {
+        fprintf(stderr, "[wh] invalid heads=%d kv_heads=%d\n", H, KV);
+        exit(1);
+    }
+    if (hd <= 0 || hd % WH_KVG != 0 || hd > WH_MAX_HD) {
+        fprintf(stderr, "[wh] head_dim=%d must be in (0,%d] and %% %d == 0\n",
+                hd, WH_MAX_HD, WH_KVG);
+        exit(1);
+    }
+    if (D <= 0 || D > WH_MAX_HIDDEN || D % WH_GS != 0) {
+        fprintf(stderr, "[wh] hidden=%d must be in (0,%d] and %% %d == 0\n",
+                D, WH_MAX_HIDDEN, WH_GS);
+        exit(1);
+    }
 
     wt_from_view(m, "model.embed_tokens.weight", &m->embed, d->vocab, D, 1);
     wt_from_view(m, "lm_head.weight", &m->lm, d->vocab, D, 1);
@@ -748,6 +771,11 @@ static void wh_model_init(WModel *m, const char *snap) {
                     "tools/kestrel_pack.py\n", snap);
             exit(1);
         }
+        if (l->downT.fmt != WT_I4G || !l->downT.q4 || !l->downT.sc || !l->downT.zp) {
+            fprintf(stderr, "[wh] layer %d downT must be int4-g64 (fmt=%d)\n",
+                    i, (int)l->downT.fmt);
+            exit(1);
+        }
         if (l->q.fmt == WT_NONE || l->gate.fmt == WT_NONE) {
             fprintf(stderr, "[wh] layer %d missing tensors\n", i);
             exit(1);
@@ -782,7 +810,7 @@ static void kv_alloc(WModel *m, int max_t) {
     }
 }
 
-static inline void kv_store_row(int8_t *dst8, __fp16 *dsts, const float *src, int hd) {
+static inline void kv_store_row(int8_t *dst8, wh_f16 *dsts, const float *src, int hd) {
     for (int g = 0; g < hd; g += WH_KVG) {
         float amax = 0.f;
         for (int j = 0; j < WH_KVG; j++) {
@@ -792,7 +820,7 @@ static inline void kv_store_row(int8_t *dst8, __fp16 *dsts, const float *src, in
         float s = amax / 127.f;
         if (s < 1e-12f) s = 1e-12f;
         float inv = 1.f / s;
-        dsts[g / WH_KVG] = (__fp16)s;
+        dsts[g / WH_KVG] = (wh_f16)s;
         for (int j = 0; j < WH_KVG; j++)
             dst8[g + j] = (int8_t)lrintf(src[g + j] * inv);
     }
@@ -800,7 +828,7 @@ static inline void kv_store_row(int8_t *dst8, __fp16 *dsts, const float *src, in
 
 /* score = qs * sum_g ks[g] * idot32(q8_g, k8_g) */
 static inline float kv_score(const int8_t *q8, float qs, const int8_t *k8,
-                             const __fp16 *ks, int hd) {
+                             const wh_f16 *ks, int hd) {
     float acc = 0.f;
 #if defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     for (int g = 0; g < hd; g += WH_KVG) {
@@ -820,7 +848,7 @@ static inline float kv_score(const int8_t *q8, float qs, const int8_t *k8,
 }
 
 static inline void kv_axpy_v(float *ctx, float a, const int8_t *v8,
-                             const __fp16 *vs, int hd) {
+                             const wh_f16 *vs, int hd) {
 #if defined(__ARM_NEON)
     for (int g = 0; g < hd; g += WH_KVG) {
         float32x4_t va = vdupq_n_f32(a * (float)vs[g / WH_KVG]);
@@ -934,7 +962,8 @@ static void wh_forward(WModel *m, const int *tokens, int S, int pos, int want_al
                     t0 = p - d->sliding_window + 1;
                 const float *qh = m->q + (int64_t)s * H * hd + hh * hd;
                 /* quantize q head */
-                int8_t q8[512];
+                /* quantize q head (hd validated ≤ WH_MAX_HD at load) */
+                int8_t q8[WH_MAX_HD];
                 float amax = 0.f;
                 for (int j = 0; j < hd; j++) { float a = fabsf(qh[j]); if (a > amax) amax = a; }
                 float qs = amax / 127.f;
@@ -943,7 +972,7 @@ static void wh_forward(WModel *m, const int *tokens, int S, int pos, int want_al
                 for (int j = 0; j < hd; j++) q8[j] = (int8_t)lrintf(qh[j] * invq);
                 float *sc = m->sc + ((int64_t)s * H + hh) * m->max_t;
                 const int8_t *K8 = m->K8[li] + (int64_t)kvh * m->max_t * hd;
-                const __fp16 *KS = m->KS[li] + (int64_t)kvh * m->max_t * (hd / WH_KVG);
+                const wh_f16 *KS = m->KS[li] + (int64_t)kvh * m->max_t * (hd / WH_KVG);
                 for (int t = t0; t <= p; t++) {
                     float scv = kv_score(q8, qs, K8 + (int64_t)t * hd,
                                          KS + (int64_t)t * (hd / WH_KVG), hd) * qscale;
@@ -955,7 +984,7 @@ static void wh_forward(WModel *m, const int *tokens, int S, int pos, int want_al
                 float *cx = m->ctx + (int64_t)s * H * hd + hh * hd;
                 memset(cx, 0, (size_t)hd * sizeof(float));
                 const int8_t *V8 = m->V8[li] + (int64_t)kvh * m->max_t * hd;
-                const __fp16 *VS = m->VS[li] + (int64_t)kvh * m->max_t * (hd / WH_KVG);
+                const wh_f16 *VS = m->VS[li] + (int64_t)kvh * m->max_t * (hd / WH_KVG);
                 for (int t = t0; t <= p; t++)
                     kv_axpy_v(cx, sc[t], V8 + (int64_t)t * hd,
                               VS + (int64_t)t * (hd / WH_KVG), hd);
@@ -1069,7 +1098,7 @@ static void wh_forward(WModel *m, const int *tokens, int S, int pos, int want_al
 #endif
                 float *acc = m->dacc + (int64_t)tid * S * D;
                 memset(acc, 0, (size_t)S * D * sizeof(float));
-                float dq[8192];
+                float dq[WH_MAX_HIDDEN];
                 #pragma omp for schedule(static) nowait
                 for (int j = 0; j < I; j++) {
                     if (S == 1) {
@@ -1301,12 +1330,18 @@ static void wh_alloc_scratch(WModel *m, int max_t) {
     m->Jkeep = (unsigned char *)balloc(I);
     m->rope_cos = falloc((int64_t)max_t * (hd / 2));
     m->rope_sin = falloc((int64_t)max_t * (hd / 2));
-    for (int p = 0; p < max_t; p++)
-        for (int j = 0; j < hd / 2; j++) {
-            float freq = powf(d->rope_theta, -2.f * j / (float)hd);
-            m->rope_cos[(int64_t)p * (hd / 2) + j] = cosf(p * freq);
-            m->rope_sin[(int64_t)p * (hd / 2) + j] = sinf(p * freq);
-        }
+    {
+        float *inv_freq = falloc(hd / 2);
+        for (int j = 0; j < hd / 2; j++)
+            inv_freq[j] = powf(d->rope_theta, -2.f * j / (float)hd);
+        for (int p = 0; p < max_t; p++)
+            for (int j = 0; j < hd / 2; j++) {
+                float ang = (float)p * inv_freq[j];
+                m->rope_cos[(int64_t)p * (hd / 2) + j] = cosf(ang);
+                m->rope_sin[(int64_t)p * (hd / 2) + j] = sinf(ang);
+            }
+        free(inv_freq);
+    }
 }
 
 /* resolve SNAP: prefer <snap>/kpk if it is a KPK pack */
@@ -1392,6 +1427,25 @@ int wh_run(int argc, char **argv) {
     int max_t = np + ngen + SPEC_K + 8;
     if (ctx_env > max_t) max_t = ctx_env;
     if (d->max_position > 0 && max_t > d->max_position) max_t = d->max_position;
+
+    /* Prefill writes KV at every prompt position — never allow np > max_t. */
+    if (np > max_t) {
+        fprintf(stderr, "[wh] prompt tokens (%d) exceed context (%d); truncating\n",
+                np, max_t);
+        np = max_t;
+        if (ngen > 0 && np >= max_t) {
+            /* leave at least one decode slot when possible */
+            int keep = max_t - 1;
+            if (keep < 1) keep = 1;
+            np = keep;
+        }
+    }
+    if (np + ngen > max_t) ngen = max_t - np;
+    if (ngen < 1) {
+        fprintf(stderr, "[wh] no room for decode after prompt (np=%d max_t=%d)\n",
+                np, max_t);
+        return 1;
+    }
 
     kv_alloc(&M, max_t);
     wh_alloc_scratch(&M, max_t);

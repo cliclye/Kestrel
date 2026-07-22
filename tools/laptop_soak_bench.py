@@ -21,6 +21,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
+from bench_host import host_info
+
 ROOT = Path(__file__).resolve().parents[1]
 KESTREL_BIN = ROOT / "engine" / "windhover-engine"
 BASELINE_BIN = Path(os.environ.get("BASELINE_BIN", "/tmp/colibri-clone/c/glm"))
@@ -62,25 +64,7 @@ def _vm_sample() -> dict:
 
 
 def _host() -> dict:
-    out: dict = {"platform": sys.platform}
-    for key, flag in (
-        ("logical_cpu", "hw.logicalcpu"),
-        ("physical_cpu", "hw.physicalcpu"),
-        ("mem_bytes", "hw.memsize"),
-        ("cpu_brand", "machdep.cpu.brand_string"),
-    ):
-        try:
-            out[key] = subprocess.check_output(
-                ["sysctl", "-n", flag], text=True, timeout=2
-            ).strip()
-        except Exception:
-            pass
-    if "mem_bytes" in out:
-        try:
-            out["mem_gb"] = round(int(out["mem_bytes"]) / (1024**3), 1)
-        except Exception:
-            pass
-    return out
+    return host_info()
 
 
 def _ensure_fixture() -> None:

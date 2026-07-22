@@ -30,6 +30,8 @@ from urllib.parse import parse_qs, urlparse
 ROOT = Path(__file__).resolve().parent
 ENGINE_DIR = ROOT / "engine"
 ENGINE_BIN = ENGINE_DIR / "windhover-engine"
+
+
 def _models_dir() -> Path:
     env = os.environ.get("WINDHOVER_MODELS") or os.environ.get("KESTREL_MODELS")
     if env:

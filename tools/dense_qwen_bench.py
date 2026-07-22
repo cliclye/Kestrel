@@ -22,6 +22,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from bench_host import host_info
+
 ROOT = Path(__file__).resolve().parents[1]
 def _default_snap() -> Path:
     for home in (Path.home() / ".windhover" / "models", Path.home() / ".kestrel" / "models"):
@@ -32,7 +34,7 @@ def _default_snap() -> Path:
 
 
 SNAP = Path(os.environ.get("WINDHOVER_SNAP", os.environ.get("KESTREL_SNAP", str(_default_snap()))))
-OUT = ROOT / "docs" / "dense_qwen_bench.json"
+OUT = Path(os.environ.get("DENSE_BENCH_OUT", str(ROOT / "docs" / "dense_qwen_bench.json")))
 MODEL_ID = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
 PROMPT = os.environ.get(
     "BENCH_PROMPT",
@@ -51,25 +53,7 @@ def _has_weights(path: Path) -> bool:
 
 
 def _host() -> dict:
-    out: dict = {"platform": sys.platform}
-    for key, flag in (
-        ("logical_cpu", "hw.logicalcpu"),
-        ("physical_cpu", "hw.physicalcpu"),
-        ("mem_bytes", "hw.memsize"),
-        ("cpu_brand", "machdep.cpu.brand_string"),
-    ):
-        try:
-            out[key] = subprocess.check_output(
-                ["sysctl", "-n", flag], text=True, timeout=2
-            ).strip()
-        except Exception:
-            pass
-    if "mem_bytes" in out:
-        try:
-            out["mem_gb"] = round(int(out["mem_bytes"]) / (1024**3), 1)
-        except Exception:
-            pass
-    return out
+    return host_info()
 
 
 def _chat_prompt(snap: Path, user: str) -> str:
@@ -181,6 +165,8 @@ def _run_with_engine(snap: Path, prompt: str, ngen: int) -> dict:
             "QUIET": "0",
             "TEMP": "0",
             "DRAFT": "0",
+            # Force legacy dense.c path even when a sibling KPK pack exists.
+            "WH": "0",
         }
     )
     t0 = time.perf_counter()
@@ -221,7 +207,7 @@ def _run_with_engine(snap: Path, prompt: str, ngen: int) -> dict:
 def main() -> int:
     if not _has_weights(SNAP):
         print(f"missing weights at {SNAP}", file=sys.stderr)
-        print("run: ./kestrel pull Qwen/Qwen2.5-Coder-1.5B-Instruct --weights", file=sys.stderr)
+        print("run: ./windhover pull Qwen/Qwen2.5-Coder-1.5B-Instruct --weights", file=sys.stderr)
         return 2
     prompt = _chat_prompt(SNAP, PROMPT)
     print(f"snap={SNAP}")
@@ -293,15 +279,20 @@ def main() -> int:
         },
     }
     wo, wi = doc["without"]["mean_tok_s"], doc["with"]["mean_tok_s"]
+    wo_rss, wi_rss = doc["without"]["mean_rss_gb"], doc["with"]["mean_rss_gb"]
     if wo and wi and wo > 0:
-        doc["delta_pct"] = round(100.0 * (wi - wo) / wo, 1)
+        doc["delta_decode_pct"] = round(100.0 * (wi - wo) / wo, 1)
+        doc["delta_pct"] = doc["delta_decode_pct"]  # back-compat
+    if wo_rss and wi_rss and wo_rss > 0:
+        doc["delta_rss_pct"] = round(100.0 * (wi_rss - wo_rss) / wo_rss, 1)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(doc, indent=2) + "\n")
     print(f"\nwrote {OUT}")
     print(
-        f"without={wo} tok/s (rss={doc['without']['mean_rss_gb']} GB)  "
-        f"with={wi} tok/s (rss={doc['with']['mean_rss_gb']} GB)  "
-        f"delta={doc.get('delta_pct')}%"
+        f"without={wo} tok/s (rss={wo_rss} GB)  "
+        f"with={wi} tok/s (rss={wi_rss} GB)  "
+        f"Δdecode={doc.get('delta_decode_pct')}%  "
+        f"Δrss={doc.get('delta_rss_pct')}%"
     )
     return 0
 
