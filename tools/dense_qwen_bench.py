@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Fair dense-engine bench: Qwen2.5-Coder-1.5B without vs with kestrel-engine.
+"""Fair dense-engine bench: Qwen2.5-Coder-1.5B without vs with windhover-engine.
 
 Both sides report **decode-only** tok/s (prefill excluded), same chat-templated
 prompt, greedy decoding, fixed max_new_tokens (no early-EOS short-circuiting the
 timer unfairly — we still stop on EOS but require enough tokens for a stable rate).
 
   without → stock transformers · CPU (or BENCH_DEVICE=mps) · float16
-  with    → kestrel-engine dense · int8 + NEON IDOT
+  with    → windhover-engine dense · int8 + NEON IDOT
 
 Writes docs/dense_qwen_bench.json. Never invents numbers.
 """
@@ -23,12 +23,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SNAP = Path(
-    os.environ.get(
-        "KESTREL_SNAP",
-        str(Path.home() / ".kestrel" / "models" / "Qwen__Qwen2.5-Coder-1.5B-Instruct"),
-    )
-)
+def _default_snap() -> Path:
+    for home in (Path.home() / ".windhover" / "models", Path.home() / ".kestrel" / "models"):
+        cand = home / "Qwen__Qwen2.5-Coder-1.5B-Instruct"
+        if cand.is_dir():
+            return cand
+    return Path.home() / ".windhover" / "models" / "Qwen__Qwen2.5-Coder-1.5B-Instruct"
+
+
+SNAP = Path(os.environ.get("WINDHOVER_SNAP", os.environ.get("KESTREL_SNAP", str(_default_snap()))))
 OUT = ROOT / "docs" / "dense_qwen_bench.json"
 MODEL_ID = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
 PROMPT = os.environ.get(
@@ -165,9 +168,9 @@ print(json.dumps({
 
 
 def _run_with_engine(snap: Path, prompt: str, ngen: int) -> dict:
-    bin_ = ROOT / "engine" / "kestrel-engine"
+    bin_ = ROOT / "engine" / "windhover-engine"
     if not bin_.is_file():
-        return {"ok": False, "error": "missing kestrel-engine — run ./kestrel build"}
+        return {"ok": False, "error": "missing windhover-engine — run ./windhover build"}
     env = os.environ.copy()
     env.update(
         {
@@ -210,7 +213,7 @@ def _run_with_engine(snap: Path, prompt: str, ngen: int) -> dict:
         "rss_gb": float(rss_m.group(1)) if rss_m else (float(load_m.group(2)) if load_m else None),
         "text": out.strip()[:240],
         "stderr_tail": err[-500:],
-        "path": "kestrel-engine dense (int8 + IDOT)",
+        "path": "windhover-engine dense (int8 + IDOT)",
         "metric": "decode_only",
     }
 
@@ -272,10 +275,10 @@ def main() -> int:
             "warmup": WARMUP,
             "metric": "decode_only (prefill excluded on both sides)",
             "without": f"transformers · {DEVICE} · float16 · greedy decode loop",
-            "with": "kestrel-engine dense · int8 weights · NEON IDOT when available",
+            "with": "windhover-engine dense · int8 weights · NEON IDOT when available",
             "note": (
                 "Earlier short-prompt runs that timed transformers generate() end-to-end "
-                "vs engine decode-only inflated the Kestrel delta; this protocol matches metrics."
+                "vs engine decode-only inflated the Windhover delta; this protocol matches metrics."
             ),
         },
         "without": {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Laptop-limit bench: same Mac without vs with kestrel-engine on glm_stress.
+"""Laptop-limit bench: same Mac without vs with windhover-engine on glm_stress.
 
 Builds the synthetic stress SNAP if missing, then interleaved generate trials.
 Honest labeling: not GLM-5.2 / Kimi — max feasible MoE stress on ~16GB Apple Silicon.
@@ -17,12 +17,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-KESTREL_BIN = ROOT / "engine" / "kestrel-engine"
+KESTREL_BIN = ROOT / "engine" / "windhover-engine"
 BASELINE_BIN = Path(os.environ.get("BASELINE_BIN", "/tmp/colibri-clone/c/glm"))
 SNAP = Path(
     os.environ.get(
         "KESTREL_SNAP",
-        str(Path.home() / ".kestrel" / "models" / "kestrel__glm-stress"),
+        str(Path.home() / ".windhover" / "models" / "kestrel__glm-stress"),
     )
 )
 OUT = ROOT / "docs" / "laptop_limit_bench.json"
@@ -53,7 +53,7 @@ def _ensure_fixture() -> None:
 
 def _run(binary: Path, prompt: str, ngen: int) -> dict:
     # Intentionally minimal env — a polluted PROMPT/QUIET from the parent shell
-    # previously made kestrel-engine skip real generation.
+    # previously made windhover-engine skip real generation.
     env = {
         "HOME": os.environ.get("HOME", str(Path.home())),
         "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -97,7 +97,7 @@ def _run(binary: Path, prompt: str, ngen: int) -> dict:
 def main() -> int:
     _ensure_fixture()
     if not KESTREL_BIN.is_file():
-        print("missing kestrel-engine — ./kestrel build", file=sys.stderr)
+        print("missing windhover-engine — ./windhover build", file=sys.stderr)
         return 1
     if not BASELINE_BIN.is_file():
         print(f"missing baseline {BASELINE_BIN}", file=sys.stderr)

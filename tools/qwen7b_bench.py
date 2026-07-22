@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Fair Qwen2.5-7B bench: same laptop · without Kestrel vs with Kestrel.
+"""Fair Qwen2.5-7B bench: same laptop · without Windhover vs with Windhover.
 
-Qwen2.5-7B is dense HF — kestrel-engine (GLM MoE) cannot load it.
-On a 16GB Mac, CPU float16 7B decode swap-thrashes; Kestrel's Mac preview
+Qwen2.5-7B is dense HF — windhover-engine (GLM MoE) cannot load it.
+On a 16GB Mac, CPU float16 7B decode swap-thrashes; Windhover's Mac preview
 path uses MPS float16 (same as Library chat for hf_small models).
 
 Protocol (fresh subprocess per side so RAM can reclaim):
 
   without → stock transformers · CPU · float16  (may timeout / thrash on 16GB)
-  with    → Kestrel Mac preview · MPS · float16
+  with    → Windhover Mac preview · MPS · float16
 
 Writes docs/qwen7b_bench.json. Never invents numbers.
 """
@@ -27,8 +27,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SNAP = Path(
     os.environ.get(
-        "KESTREL_SNAP",
-        str(Path.home() / ".kestrel" / "models" / "Qwen__Qwen2.5-7B-Instruct"),
+        "WINDHOVER_SNAP", os.environ.get("KESTREL_SNAP",
+        str(Path.home() / ".windhover" / "models" / "Qwen__Qwen2.5-7B-Instruct"),
     )
 )
 OUT = ROOT / "docs" / "qwen7b_bench.json"
@@ -84,9 +84,9 @@ def _host() -> dict:
 
 
 def _engine_probe(snap: Path) -> dict:
-    bin_ = ROOT / "engine" / "kestrel-engine"
+    bin_ = ROOT / "engine" / "windhover-engine"
     if not bin_.is_file():
-        return {"tried": False, "reason": "missing kestrel-engine"}
+        return {"tried": False, "reason": "missing windhover-engine"}
     env = {
         "HOME": os.environ.get("HOME", str(Path.home())),
         "PATH": "/usr/bin:/bin",
@@ -113,7 +113,7 @@ def _engine_probe(snap: Path) -> dict:
         "rc": p.returncode,
         "loads": p.returncode == 0 and ("tok/s" in out.lower() or "[t=" in out),
         "tail": out[-500:],
-        "note": "Qwen2 dense ≠ GLM MoE SNAP; Kestrel serves this model via Mac preview (transformers+MPS).",
+        "note": "Qwen2 dense ≠ GLM MoE SNAP; Windhover serves this model via Mac preview (transformers+MPS).",
     }
 
 
@@ -372,10 +372,10 @@ def main() -> int:
 
     size_gb = sum(p.stat().st_size for p in SNAP.rglob("*") if p.is_file()) / 1e9
     host = _host()
-    print("=== Qwen2.5-7B fair bench (without vs with Kestrel) ===")
+    print("=== Qwen2.5-7B fair bench (without vs with Windhover) ===")
     print(json.dumps({"snap": str(SNAP), "size_gb": round(size_gb, 2), "host": host}, indent=2))
     engine_probe = _engine_probe(SNAP)
-    print(f"  kestrel-engine probe: loads={engine_probe.get('loads')} rc={engine_probe.get('rc')}")
+    print(f"  windhover-engine probe: loads={engine_probe.get('loads')} rc={engine_probe.get('rc')}")
 
     without = _run_side_subprocess("without", CPU_TIMEOUT_S)
     time.sleep(4)
@@ -384,7 +384,7 @@ def main() -> int:
     report: dict = {
         "status": "ok" if with_.get("status") == "ok" else "partial",
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "framing": "same MacBook — without Kestrel vs with Kestrel",
+        "framing": "same MacBook — without Windhover vs with Windhover",
         "model": MODEL_ID,
         "model_kind": "real_hf_dense",
         "not_glm52_or_kimi": True,
@@ -397,10 +397,10 @@ def main() -> int:
         "warmup": WARMUP,
         "protocol": {
             "without_kestrel": f"stock transformers · CPU · float16 (timeout {CPU_TIMEOUT_S}s)",
-            "with_kestrel": "Kestrel Mac preview · MPS · float16 (Library chat path for hf_small)",
+            "with_kestrel": "Windhover Mac preview · MPS · float16 (Library chat path for hf_small)",
             "note": (
-                "Dense Qwen is not a kestrel-engine SNAP. On 16GB Macs, CPU 7B decode often "
-                "swap-thrashes; Kestrel's preview path uses Apple MPS."
+                "Dense Qwen is not a windhover-engine SNAP. On 16GB Macs, CPU 7B decode often "
+                "swap-thrashes; Windhover's preview path uses Apple MPS."
             ),
         },
         "kestrel_engine_probe": engine_probe,
@@ -427,9 +427,9 @@ def main() -> int:
     else:
         print(f"Without (CPU): {without.get('status')} — {without.get('note') or without.get('error')}")
     if with_.get("status") == "ok":
-        print(f"With (Kestrel MPS): {with_.get('tok_s_mean'):.2f} tok/s")
+        print(f"With (Windhover MPS): {with_.get('tok_s_mean'):.2f} tok/s")
     else:
-        print(f"With (Kestrel MPS): {with_.get('status')} — {with_}")
+        print(f"With (Windhover MPS): {with_.get('status')} — {with_}")
     if "tok_s_delta_pct" in report:
         print(f"Δ tok/s {report['tok_s_delta_pct']:+.1f}%")
     print(f"Wrote {OUT}")

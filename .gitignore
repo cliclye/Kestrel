@@ -39,7 +39,9 @@ c/tests/test_compat_direct
 c/tests/test_compat_direct.exe
 c/tests/test_budget
 c/tests/test_kv_alloc
+engine/windhover-engine
 engine/kestrel-engine
+engine/windhover-engine.unstripped
 engine/kestrel-engine.unstripped
 
 # oracoli tiny generati (make_glm_oracle.py) e dati benchmark scaricati

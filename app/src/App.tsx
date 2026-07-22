@@ -84,7 +84,7 @@ type AgentStep = {
 const FAMILIES = [
   { id: "all", label: "All" },
   { id: "mac", label: "Mac 16GB" },
-  { id: "kestrel", label: "Kestrel" },
+  { id: "windhover", label: "Windhover" },
   { id: "glm", label: "GLM" },
   { id: "qwen", label: "Qwen" },
   { id: "kimi", label: "Kimi" },
@@ -220,9 +220,9 @@ export function App() {
       try {
         const c = await fetch("./catalog.json").then((r) => r.json());
         setCatalog(c.models || []);
-        setStatus("Engine offline — open the Mac app or run ./kestrel app");
+        setStatus("Engine offline — open the Mac app or run ./windhover app");
       } catch {
-        setStatus("Start Kestrel: open the Mac app, or run ./kestrel app");
+        setStatus("Start Windhover: open the Mac app, or run ./windhover app");
       }
     }
   }
@@ -242,7 +242,7 @@ export function App() {
     const q = query.trim().toLowerCase();
     return catalog.filter((m) => {
       if (family === "mac") {
-        if (!isMacSmall(m) && m.id !== "kestrel/chat-preview") return false;
+        if (!isMacSmall(m) && m.id !== "windhover/chat-preview") return false;
       } else if (family !== "all" && (m.family || "other") !== family) {
         return false;
       }
@@ -263,7 +263,7 @@ export function App() {
     if (m.status === "download" && !useWeights) {
       const ok = confirm(
         `${m.name} is ~${m.size_gb} GB from Hugging Face.\n\n` +
-          `Kestrel will NOT install a fake stub. Continue with a real download?\n\n` +
+          `Windhover will NOT install a fake stub. Continue with a real download?\n\n` +
           `For Mac 16GB local chat under 20GB, use the Mac 16GB filter instead.`
       );
       if (!ok) return;
@@ -375,7 +375,7 @@ export function App() {
   async function openChat(id: string) {
     const inst = matchInstalled(installed, id);
     if (!inst?.chat_ok) {
-      setStatus("That pack can’t chat — install Kestrel Chat Preview, or download real weights.");
+      setStatus("That pack can’t chat — install Windhover Chat Preview, or download real weights.");
       return;
     }
     setActiveModel(id);
@@ -388,7 +388,7 @@ export function App() {
     if (!text || sending) return;
     const modelId = activeModel || chatCapable[0]?.id;
     if (!modelId) {
-      setStatus("Install Kestrel Chat Preview from Library first");
+      setStatus("Install Windhover Chat Preview from Library first");
       setTab("library");
       return;
     }
@@ -518,7 +518,7 @@ export function App() {
             <h2>Uninstall model?</h2>
             <p>
               Remove <strong>{confirmUninstall.name}</strong> from this Mac? This deletes local files
-              under <code>~/.kestrel/models</code>.
+              under <code>~/.windhover/models</code>.
             </p>
             <div className="modal-actions">
               <button type="button" className="btn ghost" onClick={() => setConfirmUninstall(null)}>
@@ -537,8 +537,8 @@ export function App() {
         <div className="brand-row">
           <img className="mark" src="./kestrel-icon.png" alt="" width={36} height={36} />
           <div className="brand">
-            <strong>Kestrel</strong>
-            <span>kestrel-engine</span>
+            <strong>Windhover</strong>
+            <span>windhover-engine</span>
           </div>
         </div>
         <div className="top-right">
@@ -548,17 +548,17 @@ export function App() {
             }`}
             title={
               engineOk === false
-                ? "Kestrel API unreachable"
+                ? "Windhover API unreachable"
                 : enginePresent === false
-                  ? "API up, but kestrel-engine binary missing — run ./kestrel build"
+                  ? "API up, but windhover-engine binary missing — run ./windhover build"
                   : engineOk
-                    ? "Kestrel API online · kestrel-engine ready"
+                    ? "Windhover API online · windhover-engine ready"
                     : "Checking…"
             }
           >
             <i className="dot" aria-hidden />
             <div className="engine-pill-text">
-              <span className="engine-pill-label">Kestrel engine</span>
+              <span className="engine-pill-label">Windhover engine</span>
               <strong>
                 {engineOk === false
                   ? "Off"
@@ -591,7 +591,7 @@ export function App() {
         {tab === "library" ? (
           <>
             <section className="hero">
-              <p className="brand-hero">Kestrel</p>
+              <p className="brand-hero">Windhover</p>
               <h1>Honest local MoE.</h1>
               <p className="lead">
                 Frontier models need a real download. Chat Preview is a small on-device model —
@@ -602,7 +602,7 @@ export function App() {
                   type="button"
                   className="btn primary"
                   onClick={() => {
-                    const prev = catalog.find((m) => m.id === "kestrel/chat-preview");
+                    const prev = catalog.find((m) => m.id === "windhover/chat-preview");
                     if (prev) void pull(prev);
                   }}
                 >
@@ -769,7 +769,7 @@ export function App() {
                             ? " · engine oracle demo"
                             : ""
                       }`
-                    : "Install Kestrel Chat Preview from Library"}
+                    : "Install Windhover Chat Preview from Library"}
                 </p>
               </div>
               <label className="model-pick">
@@ -828,7 +828,7 @@ export function App() {
                         <i />
                         <i />
                       </span>
-                      Kestrel is thinking…
+                      Windhover is thinking…
                     </div>
                   ) : null}
                 </>
@@ -838,7 +838,7 @@ export function App() {
               <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Message Kestrel…"
+                placeholder="Message Windhover…"
                 rows={2}
                 disabled={sending}
                 onKeyDown={(e) => {
@@ -1012,16 +1012,16 @@ export function App() {
 
             <div className="metrics-grid">
               <div className={`metric engine-status-metric ${engineOk && enginePresent !== false ? "on" : "off"}`}>
-                <span className="metric-label">Kestrel engine</span>
+                <span className="metric-label">Windhover engine</span>
                 <strong className="metric-value">
                   {engineOk === false ? "Off" : enginePresent === false ? "No binary" : engineOk ? "On" : "…"}
                 </strong>
                 <span className="metric-sub">
                   {engineOk === false
-                    ? "API unreachable — run ./kestrel app"
+                    ? "API unreachable — run ./windhover app"
                     : enginePresent === false
-                      ? "Build with ./kestrel build"
-                      : "API + kestrel-engine ready"}
+                      ? "Build with ./windhover build"
+                      : "API + windhover-engine ready"}
                 </span>
               </div>
               <div className="metric">
@@ -1060,7 +1060,7 @@ export function App() {
                 </div>
                 <div>
                   <dt>Chat weights</dt>
-                  <dd>{lastStats?.preview_model || stats?.chat_preview || "kestrel-engine SNAP"}</dd>
+                  <dd>{lastStats?.preview_model || stats?.chat_preview || "windhover-engine SNAP"}</dd>
                 </div>
                 <div>
                   <dt>Engine binary</dt>

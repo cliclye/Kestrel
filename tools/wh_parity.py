@@ -20,7 +20,7 @@ import tempfile
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ENGINE = os.path.join(ROOT, "engine", "kestrel-engine")
+ENGINE = os.path.join(ROOT, "engine", "windhover-engine")
 
 PROMPTS = [
     "<|im_start|>user\nWhat is the capital of France?<|im_end|>\n<|im_start|>assistant\n",

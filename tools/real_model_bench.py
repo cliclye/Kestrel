@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real-model fair bench: same laptop without vs with kestrel-engine.
+"""Real-model fair bench: same laptop without vs with windhover-engine.
 
 This is NOT for glm_tiny. That fixture is a synthetic ~2MB oracle (vocab=256,
 hidden=128) used only for numerics / scheduling — it is not GLM-5.2, Kimi, or
@@ -36,7 +36,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-KESTREL_BIN = ROOT / "engine" / "kestrel-engine"
+KESTREL_BIN = ROOT / "engine" / "windhover-engine"
 BASELINE_BIN = Path(os.environ.get("BASELINE_BIN", "/tmp/colibri-clone/c/glm"))
 OUT = ROOT / "docs" / "real_model_bench.json"
 
@@ -96,7 +96,7 @@ def _run_once(binary: Path, snap: Path, prompt: str, ngen: int) -> dict:
     t0 = time.perf_counter()
     p = subprocess.run(
         [str(binary), "64", "4", "4"],
-        cwd=str(binary.parent if binary.name != "kestrel-engine" else ROOT / "engine"),
+        cwd=str(binary.parent if binary.name != "windhover-engine" else ROOT / "engine"),
         env=env,
         capture_output=True,
         text=True,
@@ -117,9 +117,9 @@ def _run_once(binary: Path, snap: Path, prompt: str, ngen: int) -> dict:
 
 
 def main() -> int:
-    snap_env = os.environ.get("KESTREL_SNAP", "").strip()
+    snap_env = os.environ.get("WINDHOVER_SNAP", os.environ.get("KESTREL_SNAP", "").strip()
     free = _free_gb(Path.home())
-    print("=== Real-model bench (without vs with Kestrel) ===")
+    print("=== Real-model bench (without vs with Windhover) ===")
     print(
         json.dumps(
             {
@@ -179,12 +179,12 @@ def main() -> int:
         return 2
 
     if not KESTREL_BIN.is_file():
-        print(f"missing {KESTREL_BIN} — run ./kestrel build", file=sys.stderr)
+        print(f"missing {KESTREL_BIN} — run ./windhover build", file=sys.stderr)
         return 1
     if not BASELINE_BIN.is_file():
         print(
             f"missing baseline binary {BASELINE_BIN}\n"
-            f"  Set BASELINE_BIN to the non-Kestrel engine on this laptop.",
+            f"  Set BASELINE_BIN to the non-Windhover engine on this laptop.",
             file=sys.stderr,
         )
         return 1
@@ -242,7 +242,7 @@ def main() -> int:
     report = {
         "status": "ok",
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "framing": "same laptop — without Kestrel vs with Kestrel",
+        "framing": "same laptop — without Windhover vs with Windhover",
         "snap": str(snap),
         "snap_size_gb": size_gb,
         "prompt": prompt,

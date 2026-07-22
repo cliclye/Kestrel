@@ -60,7 +60,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--output",
-        default=str(Path.home() / ".kestrel" / "models" / "kestrel__glm-stress"),
+        default=str(Path.home() / ".windhover" / "models" / "kestrel__glm-stress"),
         help="output SNAP directory (default: ~/.kestrel/models/kestrel__glm-stress)",
     )
     ap.add_argument("--seed", type=int, default=2026)
@@ -105,7 +105,7 @@ def main() -> int:
         "name": "GLM Stress (laptop-limit synthetic MoE)",
         "synthetic": True,
         "not_a_real_model": True,
-        "purpose": "Push MacBook Air M4 16GB without/with kestrel-engine harder than glm_tiny",
+        "purpose": "Push MacBook Air M4 16GB without/with windhover-engine harder than glm_tiny",
         "config": {
             "vocab_size": cfg.vocab_size,
             "hidden_size": cfg.hidden_size,

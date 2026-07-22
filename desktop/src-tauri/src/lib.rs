@@ -37,14 +37,15 @@ fn health_ok() -> bool {
 
 fn start_backend() -> Option<Child> {
     let root = repo_root();
-    let kestrel = root.join("kestrel");
-    if !kestrel.is_file() {
-        eprintln!("[kestrel-desktop] missing CLI at {}", kestrel.display());
+    let cli = root.join("windhover");
+    let cli = if cli.is_file() { cli } else { root.join("kestrel") };
+    if !cli.is_file() {
+        eprintln!("[windhover-desktop] missing CLI at {}", cli.display());
         return None;
     }
-    // If something healthy is already on :8000 (e.g. `./kestrel app`), reuse it.
+    // If something healthy is already on :8000 (e.g. `./windhover app`), reuse it.
     if health_ok() {
-        eprintln!("[kestrel-desktop] reusing existing server on :8000");
+        eprintln!("[windhover-desktop] reusing existing server on :8000");
         return None;
     }
     // Prefer project venv (torch/transformers for chat preview).
@@ -55,7 +56,7 @@ fn start_backend() -> Option<Child> {
         PathBuf::from("python3")
     };
     let mut child = Command::new(&python)
-        .arg(&kestrel)
+        .arg(&cli)
         .arg("app")
         .arg("--host")
         .arg("127.0.0.1")
@@ -72,12 +73,12 @@ fn start_backend() -> Option<Child> {
             return Some(child);
         }
         if let Ok(Some(status)) = child.try_wait() {
-            eprintln!("[kestrel-desktop] backend exited early: {status}");
+            eprintln!("[windhover-desktop] backend exited early: {status}");
             return None;
         }
         thread::sleep(Duration::from_millis(100));
     }
-    eprintln!("[kestrel-desktop] backend started (health still warming up)");
+    eprintln!("[windhover-desktop] backend started (health still warming up)");
     Some(child)
 }
 
@@ -89,8 +90,8 @@ pub fn run() {
             app.manage(Backend(Mutex::new(child)));
 
             if let Some(win) = app.get_webview_window("main") {
-                let _ = win.set_title("Kestrel");
-                // Prefer the live kestrel server (UI + API same-origin). Asset:// alone
+                let _ = win.set_title("Windhover");
+                // Prefer the live Windhover server (UI + API same-origin). Asset:// alone
                 // often white-screens when absolute Vite paths / API fetches fail.
                 let win2 = win.clone();
                 thread::spawn(move || {
@@ -98,7 +99,7 @@ pub fn run() {
                         if health_ok() {
                             let url = Url::parse("http://127.0.0.1:8000/").expect("static url");
                             if let Err(e) = win2.navigate(url) {
-                                eprintln!("[kestrel-desktop] navigate failed: {e}");
+                                eprintln!("[windhover-desktop] navigate failed: {e}");
                                 let _ = win2.eval(
                                     "window.location.replace('http://127.0.0.1:8000/')",
                                 );
@@ -124,5 +125,5 @@ pub fn run() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("failed to run the Kestrel macOS application");
+        .expect("failed to run the Windhover macOS application");
 }

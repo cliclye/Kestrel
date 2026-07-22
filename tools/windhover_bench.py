@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Windhover A/B bench: KPK packs on kestrel-engine (Windhover vs legacy dense).
+"""Windhover A/B bench: KPK packs on windhover-engine.
 
 Measures decode-only tok/s, prefill tok/s, RSS, footprint, sparsity from
 engine stderr / @@WH_STATS@@. Never invents numbers.
 
-  ./kestrel bench --windhover
+  ./windhover bench --windhover
   WH_BENCH_MODELS=1.5b,7b NGEN=32 python3 tools/windhover_bench.py
 
 Writes docs/windhover_bench.json.
@@ -22,9 +22,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-ENGINE = ROOT / "engine" / "kestrel-engine"
+ENGINE = ROOT / "engine" / "windhover-engine"
 OUT = ROOT / "docs" / "windhover_bench.json"
-MODELS_DIR = Path.home() / ".kestrel" / "models"
+def _models_dir():
+    wh = Path.home() / ".windhover" / "models"
+    ke = Path.home() / ".kestrel" / "models"
+    return wh if wh.is_dir() or not ke.is_dir() else ke
+
+
+MODELS_DIR = _models_dir()
 NGEN = int(os.environ.get("BENCH_NGEN", "32"))
 TRIALS = int(os.environ.get("BENCH_TRIALS", "2"))
 WARMUP = int(os.environ.get("BENCH_WARMUP", "1"))
@@ -148,7 +154,7 @@ def _parse_wh(stderr: str, stdout: str) -> dict:
 
 def _run(snap: Path, prompt: str, *, windhover: bool) -> dict:
     if not ENGINE.is_file():
-        return {"ok": False, "error": "missing kestrel-engine — run ./kestrel build"}
+        return {"ok": False, "error": "missing windhover-engine — run ./windhover build"}
     env = os.environ.copy()
     env.update(
         {
@@ -210,7 +216,7 @@ def main() -> int:
         )
         return 2
     if not ENGINE.is_file():
-        print("missing engine — run ./kestrel build", file=sys.stderr)
+        print("missing engine — run ./windhover build", file=sys.stderr)
         return 2
 
     doc: dict = {
@@ -222,7 +228,7 @@ def main() -> int:
             "trials": TRIALS,
             "warmup": WARMUP,
             "metric": "decode_only from [wh] / @@WH_STATS@@",
-            "windhover": "default kestrel-engine (KPK mmap + CATS + int8 KV)",
+            "windhover": "default windhover-engine (KPK mmap + CATS + int8 KV)",
             "legacy": "WH=0 dense.c path when pack still loads",
         },
         "models": {},

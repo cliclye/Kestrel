@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render README benchmark SVG from docs/full_bench.json (measured data only).
 
-Public framing: same laptop · without kestrel-engine vs with kestrel-engine.
+Public framing: same laptop · without Windhover vs with Windhover.
 (JSON still uses keys stock/kestrel for the two binaries under test.)
 """
 from __future__ import annotations
@@ -123,7 +123,7 @@ def render(data: dict) -> str:
 
   <rect x="24" y="360" width="872" height="100" rx="10" fill="#ffffff" stroke="#d5ddd7"/>
   <text x="44" y="386" class="panel">What this measures</text>
-  <text x="44" y="408" class="foot">• Same Mac, same fixture, same prompts — baseline local MoE engine path vs kestrel-engine</text>
+  <text x="44" y="408" class="foot">• Same Mac, same fixture, same prompts — baseline local MoE engine path vs windhover-engine</text>
   <text x="44" y="426" class="foot">• Interleaved A/B batches · warmup discarded · Welch on batch means · both sides 32/32 oracle</text>
   <text x="44" y="444" class="foot">• glm_tiny is synthetic (~2MB). Frontier MoE (GLM-5.2 / Kimi): tools/real_model_bench.py after download.</text>
 
@@ -131,7 +131,7 @@ def render(data: dict) -> str:
     <rect width="12" height="12" rx="2" fill="#8a9096"/>
     <text x="18" y="11" class="legend">Without Kestrel (baseline engine)</text>
     <rect x="250" width="12" height="12" rx="2" fill="#6fbf94"/>
-    <text x="268" y="11" class="legend">With Kestrel (kestrel-engine)</text>
+    <text x="268" y="11" class="legend">With Windhover (windhover-engine)</text>
     <text x="520" y="11" class="foot">Source: docs/full_bench.json · verify: python3 tools/verify_bench.py</text>
   </g>
 </svg>

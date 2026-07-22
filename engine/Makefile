@@ -1,5 +1,5 @@
-# Kestrel engine — clean-slate modular build (CPU MoE).
-# Primary binary: ./kestrel-engine
+# Windhover engine — modular build (CPU MoE + dense KPK).
+# Primary binary: ./windhover-engine
 #
 # Layout:
 #   io/        safetensors + tokenizer + json headers
@@ -44,7 +44,7 @@ endif
 
 .PHONY: all clean test-oracle
 
-all: kestrel-engine
+all: windhover-engine
 
 memory/budget.o: memory/budget.c memory/budget.h
 	$(CC) $(CFLAGS) -c memory/budget.c -o memory/budget.o
@@ -61,12 +61,14 @@ runtime/windhover.o: runtime/windhover.c runtime/windhover.h runtime/model_desc.
 runtime/au.o: runtime/au.c runtime/au.h
 	$(CC) $(CFLAGS) -c runtime/au.c -o runtime/au.o
 
-kestrel-engine: runtime/engine.o runtime/dense.o runtime/windhover.o runtime/au.o memory/budget.o
+windhover-engine: runtime/engine.o runtime/dense.o runtime/windhover.o runtime/au.o memory/budget.o
 	$(CC) $(CFLAGS) -o $@ runtime/engine.o runtime/dense.o runtime/windhover.o runtime/au.o memory/budget.o $(LDFLAGS)
+	@# Compat symlink for older docs/scripts
+	ln -sfn windhover-engine kestrel-engine
 
 # SNAP path relative to engine/ — fixtures live in fixtures/
-test-oracle: kestrel-engine
-	SNAP=./fixtures/glm_tiny TF=1 ./kestrel-engine 64 16 16
+test-oracle: windhover-engine
+	SNAP=./fixtures/glm_tiny TF=1 ./windhover-engine 64 16 16
 
 clean:
-	rm -f kestrel-engine runtime/engine.o runtime/dense.o runtime/windhover.o runtime/au.o memory/budget.o
+	rm -f windhover-engine kestrel-engine runtime/engine.o runtime/dense.o runtime/windhover.o runtime/au.o memory/budget.o

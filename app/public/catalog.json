@@ -1,15 +1,15 @@
 {
   "models": [
     {
-      "id": "kestrel/chat-preview",
-      "name": "Kestrel Chat Preview",
+      "id": "windhover/chat-preview",
+      "name": "Windhover Chat Preview",
       "description": "Honest local chat via SmolLM2-360M on-device. Not Kimi, Qwen, or any frontier MoE \u2014 use this to talk; use Download for real model weights.",
       "size_gb": 0.7,
       "license": "Apache-2.0",
       "source": "preview",
       "chat": "preview",
       "preview_repo": "HuggingFaceTB/SmolLM2-360M-Instruct",
-      "family": "kestrel",
+      "family": "windhover",
       "status": "ready",
       "engine": "preview",
       "ram_gb": 2,
@@ -20,9 +20,9 @@
       ]
     },
     {
-      "id": "kestrel/glm-tiny-demo",
+      "id": "windhover/glm-tiny-demo",
       "name": "GLM Tiny (engine demo)",
-      "description": "Runs the real kestrel-engine path (oracle fixture). Proves load\u2192forward \u2014 not coherent English chat.",
+      "description": "Runs the real windhover-engine path (oracle fixture). Proves load\u2192forward \u2014 not coherent English chat.",
       "size_gb": 0.01,
       "license": "Apache-2.0",
       "source": "fixture",
@@ -30,7 +30,7 @@
       "chat": "engine-oracle",
       "family": "glm",
       "status": "ready",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 1,
       "tags": [
         "demo",
@@ -41,17 +41,17 @@
     {
       "id": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
       "name": "SmolLM2 1.7B Instruct",
-      "description": "Small instruct model for MacBook Air M4 16GB. Real HF download (~3.4GB); kestrel-engine dense path (llama layout).",
+      "description": "Small instruct model for MacBook Air M4 16GB. Real HF download (~3.4GB); windhover-engine dense path (llama layout).",
       "size_gb": 3.4,
       "license": "Apache-2.0",
       "source": "hf_small",
       "hf_repo": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
       "preview_repo": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
       "chat": "engine",
-      "family": "kestrel",
+      "family": "windhover",
       "tier": "mac16",
       "status": "ready",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 4,
       "tags": [
         "mac16",
@@ -72,7 +72,7 @@
       "family": "qwen",
       "tier": "mac16",
       "status": "ready",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 2,
       "tags": [
         "mac16",
@@ -93,7 +93,7 @@
       "family": "qwen",
       "tier": "mac16",
       "status": "ready",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 4,
       "tags": [
         "mac16",
@@ -104,7 +104,7 @@
     {
       "id": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
       "name": "Qwen2.5 Coder 1.5B",
-      "description": "Small coding-focused Qwen2.5. Real HF weights (~3GB); runs on kestrel-engine dense path (Mac 16GB).",
+      "description": "Small coding-focused Qwen2.5. Real HF weights (~3GB); runs on windhover-engine dense path (Mac 16GB).",
       "size_gb": 3.1,
       "license": "Apache-2.0",
       "source": "hf_small",
@@ -114,7 +114,7 @@
       "family": "qwen",
       "tier": "mac16",
       "status": "ready",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 4,
       "tags": [
         "mac16",
@@ -126,7 +126,7 @@
     {
       "id": "Qwen/Qwen2.5-3B-Instruct",
       "name": "Qwen2.5 3B Instruct",
-      "description": "Strong small Qwen2.5. ~6GB download; kestrel-engine dense path on M4 Air 16GB.",
+      "description": "Strong small Qwen2.5. ~6GB download; windhover-engine dense path on M4 Air 16GB.",
       "size_gb": 6.2,
       "license": "Apache-2.0",
       "source": "hf_small",
@@ -136,7 +136,7 @@
       "family": "qwen",
       "tier": "mac16",
       "status": "ready",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 8,
       "tags": [
         "mac16",
@@ -157,7 +157,7 @@
       "family": "qwen",
       "tier": "mac16",
       "status": "ready",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 14,
       "tags": [
         "mac16",
@@ -168,7 +168,7 @@
     {
       "id": "Qwen/Qwen3-0.6B",
       "name": "Qwen3 0.6B",
-      "description": "Newest tiny Qwen3. Real HF weights; runs on kestrel-engine dense path (int8 attn + int4 MLP).",
+      "description": "Newest tiny Qwen3. Real HF weights; runs on windhover-engine dense path (int8 attn + int4 MLP).",
       "size_gb": 1.2,
       "license": "Apache-2.0",
       "source": "hf_small",
@@ -178,7 +178,7 @@
       "family": "qwen",
       "tier": "mac16",
       "status": "ready",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 3,
       "tags": [
         "mac16",
@@ -199,7 +199,7 @@
       "family": "qwen",
       "tier": "mac16",
       "status": "ready",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 5,
       "tags": [
         "mac16",
@@ -210,7 +210,7 @@
     {
       "id": "Qwen/Qwen3-4B",
       "name": "Qwen3 4B",
-      "description": "Mid-size Qwen3 (~8GB). Real HF weights; runs on kestrel-engine dense path (int8 attn + int4 MLP).",
+      "description": "Mid-size Qwen3 (~8GB). Real HF weights; runs on windhover-engine dense path (int8 attn + int4 MLP).",
       "size_gb": 8.0,
       "license": "Apache-2.0",
       "source": "hf_small",
@@ -220,7 +220,7 @@
       "family": "qwen",
       "tier": "mac16",
       "status": "ready",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 10,
       "tags": [
         "mac16",
@@ -241,7 +241,7 @@
       "family": "llama",
       "tier": "mac16",
       "status": "ready",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 3,
       "tags": [
         "mac16",
@@ -252,17 +252,17 @@
     {
       "id": "microsoft/Phi-3.5-mini-instruct",
       "name": "Phi-3.5 Mini Instruct",
-      "description": "Microsoft Phi-3.5 mini (~7.5GB). Windhover KPK on kestrel-engine after convert; solid on 16GB unified memory.",
+      "description": "Microsoft Phi-3.5 mini (~7.5GB). Windhover KPK on windhover-engine after convert; solid on 16GB unified memory.",
       "size_gb": 7.5,
       "license": "MIT",
       "source": "hf_small",
       "hf_repo": "microsoft/Phi-3.5-mini-instruct",
       "preview_repo": "microsoft/Phi-3.5-mini-instruct",
       "chat": "engine",
-      "family": "kestrel",
+      "family": "windhover",
       "tier": "mac16",
       "status": "ready",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 10,
       "tags": [
         "mac16",
@@ -275,17 +275,17 @@
     {
       "id": "google/gemma-2-2b-it",
       "name": "Gemma 2 2B IT",
-      "description": "Google Gemma 2 2B instruct (~5GB). Accept HF license once; Windhover KPK on kestrel-engine for Mac 16GB.",
+      "description": "Google Gemma 2 2B instruct (~5GB). Accept HF license once; Windhover KPK on windhover-engine for Mac 16GB.",
       "size_gb": 5.0,
       "license": "Gemma",
       "source": "hf_small",
       "hf_repo": "google/gemma-2-2b-it",
       "preview_repo": "google/gemma-2-2b-it",
       "chat": "engine",
-      "family": "kestrel",
+      "family": "windhover",
       "tier": "mac16",
       "status": "ready",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 6,
       "tags": [
         "mac16",
@@ -308,7 +308,7 @@
       "family": "deepseek",
       "tier": "mac16",
       "status": "ready",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 5,
       "tags": [
         "mac16",
@@ -319,7 +319,7 @@
     {
       "id": "zai-org/GLM-5.2-FP8",
       "name": "GLM-5.2",
-      "description": "Z.ai MoE+DSA. Requires full HF download (~756GB) + FP8\u2192int4 convert before kestrel-engine chat. Not a tiny stub.",
+      "description": "Z.ai MoE+DSA. Requires full HF download (~756GB) + FP8\u2192int4 convert before windhover-engine chat. Not a tiny stub.",
       "size_gb": 756,
       "license": "MIT",
       "hf_repo": "zai-org/GLM-5.2-FP8",
@@ -327,7 +327,7 @@
       "chat": "engine",
       "family": "glm",
       "status": "download",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 24,
       "tags": [
         "moe",
@@ -346,7 +346,7 @@
       "chat": "engine",
       "family": "glm",
       "status": "download",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 24,
       "tags": [
         "moe",
@@ -364,7 +364,7 @@
       "chat": "engine",
       "family": "glm",
       "status": "download",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 16,
       "tags": [
         "moe",
@@ -382,7 +382,7 @@
       "chat": "engine",
       "family": "qwen",
       "status": "download",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 16,
       "tags": [
         "moe",
@@ -400,7 +400,7 @@
       "chat": "engine",
       "family": "qwen",
       "status": "download",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 48,
       "tags": [
         "moe",
@@ -418,7 +418,7 @@
       "chat": "engine",
       "family": "qwen",
       "status": "download",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 16,
       "tags": [
         "moe",
@@ -437,7 +437,7 @@
       "chat": "engine",
       "family": "kimi",
       "status": "download",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 48,
       "tags": [
         "moe",
@@ -456,7 +456,7 @@
       "chat": "engine",
       "family": "kimi",
       "status": "download",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 48,
       "tags": [
         "moe",
@@ -474,7 +474,7 @@
       "chat": "engine",
       "family": "kimi",
       "status": "download",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 48,
       "tags": [
         "moe",
@@ -493,7 +493,7 @@
       "chat": "engine",
       "family": "deepseek",
       "status": "download",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 32,
       "tags": [
         "moe",
@@ -511,7 +511,7 @@
       "chat": "engine",
       "family": "deepseek",
       "status": "download",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 32,
       "tags": [
         "moe",
@@ -529,7 +529,7 @@
       "chat": "engine",
       "family": "mistral",
       "status": "download",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 16,
       "tags": [
         "mistral",
@@ -546,7 +546,7 @@
       "chat": "engine",
       "family": "llama",
       "status": "download",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 24,
       "tags": [
         "moe",
@@ -564,7 +564,7 @@
       "chat": "engine",
       "family": "llama",
       "status": "download",
-      "engine": "kestrel-engine",
+      "engine": "windhover-engine",
       "ram_gb": 20,
       "tags": [
         "moe",

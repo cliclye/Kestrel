@@ -1,7 +1,7 @@
 [package]
 name = "kestrel-desktop"
 version = "0.1.0"
-description = "Kestrel — native macOS app for local MoE inference"
+description = "Windhover — native macOS app for local LLM inference"
 authors = ["Vexilo"]
 edition = "2021"
 rust-version = "1.77"

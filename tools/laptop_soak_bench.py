@@ -22,12 +22,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-KESTREL_BIN = ROOT / "engine" / "kestrel-engine"
+KESTREL_BIN = ROOT / "engine" / "windhover-engine"
 BASELINE_BIN = Path(os.environ.get("BASELINE_BIN", "/tmp/colibri-clone/c/glm"))
 SNAP = Path(
     os.environ.get(
         "KESTREL_SNAP",
-        str(Path.home() / ".kestrel" / "models" / "kestrel__glm-stress"),
+        str(Path.home() / ".windhover" / "models" / "kestrel__glm-stress"),
     )
 )
 OUT = ROOT / "docs" / "laptop_soak_bench.json"

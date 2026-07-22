@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Full fair benchmark: same laptop without vs with kestrel-engine.
+"""Full fair benchmark: same laptop without vs with windhover-engine.
 
 Accuracy rules:
-  - Baseline = reference local MoE engine binary; Kestrel = engine/kestrel-engine.
+  - Baseline = reference local MoE engine binary; Kestrel = engine/windhover-engine.
   - Both ARCH=native; identical fixture; no in-process loop cheats on the baseline.
   - One trial = BATCH consecutive TF process runs (default 40), timed as one wall.
   - Warmup batches discarded; report mean/median/stdev/95% CI + Welch test.
@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-KESTREL_GLM = ROOT / "engine" / "kestrel-engine"
+KESTREL_GLM = ROOT / "engine" / "windhover-engine"
 STOCK_GLM = Path("/tmp/colibri-clone/c/glm")
 KESTREL_C = ROOT / "engine"
 STOCK_C = Path("/tmp/colibri-clone/c")
@@ -300,7 +300,7 @@ def main() -> int:
     meta = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "methodology": {
-            "mode": "TF teacher-forcing (kestrel-engine fixtures/glm_tiny vs stock glm_tiny)",
+            "mode": "TF teacher-forcing (windhover-engine fixtures/glm_tiny vs stock glm_tiny)",
             "trial_definition": (
                 f"one trial = {batch_size} consecutive processes; "
                 f"{batches} trials after {warmup} warmup batches"
@@ -311,7 +311,7 @@ def main() -> int:
                 "both ARCH=native OpenMP",
                 "same glm_tiny + ref_glm.json",
                 "page-cache warm (warmup discarded) — steady-state, not cold-start",
-                "primary binary: engine/kestrel-engine",
+                "primary binary: engine/windhover-engine",
             ],
             "primary_metrics": [
                 "pos/s: engine-reported forward_all throughput (excludes load)",
@@ -333,7 +333,7 @@ def main() -> int:
 
     print("=== Fair benchmark: without Kestrel vs with Kestrel (same laptop) ===")
     print(json.dumps({
-        "framing": "without_kestrel (baseline) vs with_kestrel (kestrel-engine)",
+        "framing": "without_kestrel (baseline) vs with_kestrel (windhover-engine)",
         "baseline_sha_match": meta["sha_match"],
         "batches": batches,
         "batch_size": batch_size,

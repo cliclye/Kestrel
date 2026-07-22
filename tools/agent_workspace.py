@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Workspace-scoped agent tools for Kestrel Agent (local LLM coding loop).
+"""Workspace-scoped agent tools for Windhover Agent (local LLM coding loop).
 
 All paths must resolve under the user-selected workspace root. No network tools.
 """
@@ -279,7 +279,7 @@ def _loose_json_tool(raw: str) -> dict[str, Any] | None:
     return out
 
 
-AGENT_SYSTEM = """You are Kestrel Agent, a local coding assistant. You edit files ONLY inside the user workspace using tools.
+AGENT_SYSTEM = """You are Windhover Agent, a local coding assistant. You edit files ONLY inside the user workspace using tools.
 
 Preferred tool format (easy for local models):
 

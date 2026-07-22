@@ -1,7 +1,7 @@
-.PHONY: all engine kestrel-engine test-oracle glm portable test check cuda-test clean install uninstall clean-engine
+.PHONY: all engine windhover-engine kestrel-engine test-oracle glm portable test check cuda-test clean install uninstall clean-engine
 
-# Product binary (clean-slate engine/)
-all engine kestrel-engine:
+# Product binary (engine/)
+all engine windhover-engine kestrel-engine:
 	$(MAKE) -C engine ARCH=$(or $(ARCH),native)
 
 test-oracle:
