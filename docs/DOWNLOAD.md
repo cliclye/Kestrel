@@ -4,11 +4,9 @@
 
 Stable URL (always the latest GitHub Release asset):
 
-**https://github.com/cliclye/Kestrel/releases/latest/download/Windhover-macOS-arm64.dmg**
+**https://github.com/cliclye/Windhover/releases/latest/download/Windhover-macOS-arm64.dmg**
 
-Browse releases: https://github.com/cliclye/Kestrel/releases/latest
-
-> The GitHub repository is still named `Kestrel`; the product is **Windhover**.
+Browse releases: https://github.com/cliclye/Windhover/releases/latest
 
 ### Install
 
@@ -16,17 +14,27 @@ Browse releases: https://github.com/cliclye/Kestrel/releases/latest
 2. Open it and drag **Windhover** into Applications
 3. Launch Windhover from Applications / Launchpad
 
-### First launch — Gatekeeper (unsigned builds)
+### First launch — “damaged” / Gatekeeper (unsigned builds)
 
-CI ships an **unsigned** DMG until Apple Developer signing + notarization secrets are configured. On first open macOS may say the app “cannot be opened because it is from an unidentified developer.”
+CI ships an **ad-hoc signed but not Apple-notarized** DMG (no Developer ID yet). After download, macOS may say:
 
-Allow it once using any of:
+- **“Windhover is damaged and can’t be opened”**, or
+- “cannot be opened because it is from an unidentified developer”
+
+That is Gatekeeper quarantine on community builds — **not** a corrupt download.
+
+**Fix (recommended):**
+
+```bash
+xattr -cr /Applications/Windhover.app
+```
+
+Then open Windhover again (or right-click → **Open** → **Open**).
+
+Alternatives:
 
 - Right-click **Windhover** → **Open** → **Open**
 - **System Settings → Privacy & Security** → **Open Anyway**
-- Terminal: `xattr -cr /Applications/Windhover.app`
-
-This is expected for unsigned community builds, not a malware warning from Windhover itself.
 
 ### Requirements
 
@@ -41,8 +49,8 @@ Intel Macs: build from source for now (see README).
 
 Stable URLs:
 
-- **https://github.com/cliclye/Kestrel/releases/latest/download/Windhover-Windows-x64.exe** — Intel/AMD 64-bit
-- **https://github.com/cliclye/Kestrel/releases/latest/download/Windhover-Windows-arm64.exe** — Snapdragon / ARM64 PCs
+- **https://github.com/cliclye/Windhover/releases/latest/download/Windhover-Windows-x64.exe** — Intel/AMD 64-bit
+- **https://github.com/cliclye/Windhover/releases/latest/download/Windhover-Windows-arm64.exe** — Snapdragon / ARM64 PCs
 
 ### Install
 
@@ -80,22 +88,22 @@ Same honesty as the macOS Gatekeeper path: community builds are not notarized/si
    ```
 
 3. GitHub Actions workflows build and attach:
-   - **Release macOS** → `Windhover-macOS-arm64.dmg`
+   - **Release macOS** → `Windhover-macOS-arm64.dmg` (ad-hoc codesigned)
    - **Release Windows** → `Windhover-Windows-x64.exe` + `Windhover-Windows-arm64.exe`
 4. Confirm the stable latest URLs work:
 
    ```bash
-   curl -sI https://github.com/cliclye/Kestrel/releases/latest/download/Windhover-macOS-arm64.dmg | head
-   curl -sI https://github.com/cliclye/Kestrel/releases/latest/download/Windhover-Windows-x64.exe | head
-   curl -sI https://github.com/cliclye/Kestrel/releases/latest/download/Windhover-Windows-arm64.exe | head
+   curl -sI https://github.com/cliclye/Windhover/releases/latest/download/Windhover-macOS-arm64.dmg | head
+   curl -sI https://github.com/cliclye/Windhover/releases/latest/download/Windhover-Windows-x64.exe | head
+   curl -sI https://github.com/cliclye/Windhover/releases/latest/download/Windhover-Windows-arm64.exe | head
    ```
 
-Manual dry-run (artifact only, no Release): **Actions → Release macOS / Release Windows → Run workflow**.
+Manual dry-run: **Actions → Release macOS / Release Windows → Run workflow**.
 
 ### Optional: signing
 
-- **macOS:** Apple Developer secrets (`APPLE_CERTIFICATE`, …) — see [Tauri macOS signing](https://v2.tauri.app/distribute/sign-macos/).
-- **Windows:** Authenticode certificate secrets — see [Tauri Windows signing](https://v2.tauri.app/distribute/sign-windows/).
+- **macOS:** Apple Developer secrets — see [Tauri macOS signing](https://v2.tauri.app/distribute/sign-macos/).
+- **Windows:** Authenticode — see [Tauri Windows signing](https://v2.tauri.app/distribute/sign-windows/).
 
 Until then, keep the Gatekeeper / SmartScreen notes above honest and visible.
 
@@ -115,14 +123,11 @@ open src-tauri/target/release/bundle/macos/Windhover.app
 ### Windows (MinGW/Clang engine + NSIS)
 
 ```powershell
-# Engine (MSYS2 UCRT64 / CLANGARM64)
 cd engine
 make
 
-# UI + PyInstaller sidecar
 cd ..
 powershell -File packaging/build_sidecar.ps1 -Triple x86_64-pc-windows-msvc
-# ARM64: -Triple aarch64-pc-windows-msvc
 
 cd desktop
 cargo tauri build --bundles nsis --target x86_64-pc-windows-msvc

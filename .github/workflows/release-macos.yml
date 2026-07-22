@@ -54,25 +54,53 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2.0.0" --locked
 
-      - name: Build Windhover .dmg
+      - name: Build Windhover .app
         working-directory: desktop
-        # No Apple signing secrets → unsigned bundle (honest Gatekeeper path).
-        run: cargo tauri build --bundles dmg --target aarch64-apple-darwin
+        # Unsigned Developer ID — we ad-hoc codesign next so Gatekeeper does not
+        # report the misleading "damaged and can't be opened" error.
+        run: cargo tauri build --bundles app --target aarch64-apple-darwin
 
-      - name: Stage stable asset name
+      - name: Ad-hoc codesign app bundle
         run: |
           set -euo pipefail
-          mkdir -p dist
-          # Tauri puts target-triple builds under target/<triple>/release/bundle/dmg/
-          DMG="$(find desktop/src-tauri/target -path '*/bundle/dmg/*.dmg' -type f | head -n 1)"
-          if [ -z "$DMG" ]; then
-            echo "No .dmg found under desktop/src-tauri/target" >&2
-            find desktop/src-tauri/target -type d -name bundle 2>/dev/null || true
+          APP="$(find desktop/src-tauri/target -path '*/release/bundle/macos/*.app' -type d | head -n 1)"
+          if [ -z "$APP" ] || [ ! -d "$APP" ]; then
+            echo "No .app found under desktop/src-tauri/target" >&2
+            find desktop/src-tauri/target -type d -name '*.app' 2>/dev/null || true
             exit 1
           fi
-          echo "Found: $DMG"
-          cp "$DMG" dist/Windhover-macOS-arm64.dmg
-          ls -lh dist/Windhover-macOS-arm64.dmg
+          echo "Signing: $APP"
+          # Replace linker-only adhoc signature with a full bundle signature
+          # (Sealed Resources). Without this, macOS often says the download is "damaged".
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
+          codesign -dv --verbose=2 "$APP" 2>&1 | tee /tmp/windhover-codesign.txt
+          grep -q 'Sealed Resources version=' /tmp/windhover-codesign.txt
+          echo "Ad-hoc codesign OK"
+
+      - name: Package signed .app into DMG
+        run: |
+          set -euo pipefail
+          APP="$(find desktop/src-tauri/target -path '*/release/bundle/macos/*.app' -type d | head -n 1)"
+          test -d "$APP"
+          mkdir -p dist
+          STAGE="$(mktemp -d)"
+          cp -R "$APP" "$STAGE/Windhover.app"
+          ln -s /Applications "$STAGE/Applications"
+          # Re-assert signature after copy
+          codesign --force --deep --sign - "$STAGE/Windhover.app"
+          codesign --verify --deep --strict "$STAGE/Windhover.app"
+          RM_DMG=dist/Windhover-macOS-arm64.dmg
+          rm -f "$RM_DMG"
+          hdiutil create \
+            -volname "Windhover" \
+            -srcfolder "$STAGE" \
+            -ov \
+            -format UDZO \
+            "$RM_DMG"
+          rm -rf "$STAGE"
+          ls -lh "$RM_DMG"
+          hdiutil verify "$RM_DMG"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
@@ -100,7 +128,7 @@ jobs:
             **[Windhover-Windows-arm64.exe](https://github.com/cliclye/Windhover/releases/latest/download/Windhover-Windows-arm64.exe)** — Snapdragon / ARM64
 
             ### First launch
-            - **macOS:** unsigned — Gatekeeper may require Open Anyway ([docs/DOWNLOAD.md](https://github.com/cliclye/Windhover/blob/main/docs/DOWNLOAD.md))
+            - **macOS:** if Gatekeeper says the app is **“damaged”**, run `xattr -cr /Applications/Windhover.app` (not a corrupt download — see [docs/DOWNLOAD.md](https://github.com/cliclye/Windhover/blob/main/docs/DOWNLOAD.md))
             - **Windows:** unsigned — SmartScreen may require More info → Run anyway
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

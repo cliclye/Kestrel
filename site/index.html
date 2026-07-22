@@ -190,11 +190,11 @@
         </a>
       </div>
       <div class="note">
-        <strong>First launch:</strong> builds are currently <strong>unsigned</strong>.
-        macOS Gatekeeper may require right-click → Open (or
-        <code>xattr -cr /Applications/Windhover.app</code>). Windows SmartScreen may require
-        More info → Run anyway. Details in
-        <a href="https://github.com/cliclye/Kestrel/blob/main/docs/DOWNLOAD.md" style="color: var(--copper)"
+        <strong>First launch:</strong> builds are <strong>not Apple-notarized / Authenticode-signed</strong> yet.
+        macOS may say the app is <strong>“damaged”</strong> — that is Gatekeeper, not a bad file. After installing, run
+        <code>xattr -cr /Applications/Windhover.app</code>, or right-click → Open.
+        Windows SmartScreen may require More info → Run anyway. Details in
+        <a href="https://github.com/cliclye/Windhover/blob/main/docs/DOWNLOAD.md" style="color: var(--copper)"
           >docs/DOWNLOAD.md</a
         >.
       </div>
