@@ -217,6 +217,12 @@ Local replies with speed / RSS chips per message.
 
 ![Windhover Chat](docs/screenshots/chat.png)
 
+### Agent
+
+Pick a folder on your Mac. The local model lists / reads / writes under that root only — lightweight on-device coding agent.
+
+![Windhover Agent](docs/screenshots/agent.png)
+
 ### Advanced
 
 Live engine telemetry — RSS, tok/s, Windhover decode stats.
