@@ -63,11 +63,17 @@ Same machine: **MacBook Air M4 · 16 GB** · budget **≤ 9 GB RSS**
 
 **Verdict:** under a 9 GB ceiling on this M4 Air, Windhover is the usable path — about **9.8 decode tok/s at ~4.2 GB RSS**. Without it, the same 7B is effectively dead (~0.01 tok/s).
 
-![Decode throughput](docs/screenshots/bench-qwen7b-decode.png)
+```text
+Decode tok/s          Without │ 0.013  ▏
+                      Windhover │ 9.80   ████████████████████████████  (~780×)
 
-![Resident set vs 9 GB cap](docs/screenshots/bench-qwen7b-rss.png)
+RSS vs 9 GB budget    Without │ 8.82 GB ████████████████████████░░  swap-bound*
+                      Windhover │ 4.19 GB ███████████░░░░░░░░░░░░░░  fits
 
-![Full comparison table](docs/screenshots/bench-qwen7b-table.png)
+* Live without-engine attempt aborted at 6.44 GB RSS after +1.5 GB swap.
+```
+
+![Qwen2.5-7B with vs without Windhover](docs/screenshots/bench-qwen7b-m4.svg)
 
 ### What the gap means
 
@@ -87,6 +93,8 @@ After the without-engine swap stress, Windhover was re-run on the same machine:
 | After without-engine swap stress | 5.62 tok/s | 4.19 GB |
 
 RSS stays flat. Throughput drops under thermal / memory pressure — honest, not hidden.
+
+![Host pressure](docs/screenshots/bench-qwen7b-pressure.svg)
 
 <details>
 <summary>Bench notes</summary>

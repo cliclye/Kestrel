@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="280" viewBox="0 0 920 280" role="img"
+     aria-label="Windhover host pressure on MacBook Air M4 after swap stress">
+  <defs>
+    <style>
+      .title { font: 700 18px ui-sans-serif, system-ui, -apple-system, sans-serif; fill: #e6ebe8; }
+      .sub { font: 400 12px ui-sans-serif, system-ui, -apple-system, sans-serif; fill: #8a968e; }
+      .panel { font: 600 12px ui-sans-serif, system-ui, -apple-system, sans-serif; fill: #e6ebe8; }
+      .tick { font: 500 11px ui-sans-serif, system-ui, -apple-system, sans-serif; fill: #8a968e; }
+      .val { font: 700 16px ui-monospace, Menlo, monospace; fill: #e6ebe8; }
+      .foot { font: 400 11px ui-sans-serif, system-ui, -apple-system, sans-serif; fill: #7a8780; }
+      .ok { font: 600 12px ui-monospace, Menlo, monospace; fill: #7dcea0; }
+      .warn { font: 600 12px ui-monospace, Menlo, monospace; fill: #d4a574; }
+    </style>
+    <linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a0e0c"/>
+      <stop offset="100%" stop-color="#06080a"/>
+    </linearGradient>
+  </defs>
+  <rect width="920" height="280" fill="url(#bg2)" rx="14"/>
+  <text x="40" y="34" class="title">Host pressure · same Mac, same day</text>
+  <text x="40" y="54" class="sub">Windhover re-run after without-engine swap stress · RSS stays flat; tok/s drops honestly</text>
+
+  <rect x="28" y="76" width="420" height="168" rx="12" fill="#0d1210" stroke="rgba(230,235,232,0.10)"/>
+  <text x="48" y="104" class="panel">Quiet (earlier)</text>
+  <text x="48" y="150" class="val">9.80 tok/s</text>
+  <text x="48" y="178" class="ok">4.19 GB RSS</text>
+  <text x="48" y="210" class="foot">Before stock-path thrash</text>
+
+  <rect x="472" y="76" width="420" height="168" rx="12" fill="#0d1210" stroke="rgba(230,235,232,0.10)"/>
+  <text x="492" y="104" class="panel">After without-engine swap stress</text>
+  <text x="492" y="150" class="val">5.62 tok/s</text>
+  <text x="492" y="178" class="warn">4.19 GB RSS</text>
+  <text x="492" y="210" class="foot">H42% slower · memory still capped</text>
+</svg>

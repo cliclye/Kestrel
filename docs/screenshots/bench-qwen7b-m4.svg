@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="480" viewBox="0 0 920 480" role="img"
+     aria-label="Qwen2.5-7B with vs without Windhover on MacBook Air M4 16GB">
+  <defs>
+    <style>
+      .title { font: 700 20px ui-sans-serif, system-ui, -apple-system, sans-serif; fill: #e6ebe8; }
+      .sub { font: 400 12px ui-sans-serif, system-ui, -apple-system, sans-serif; fill: #8a968e; }
+      .panel { font: 600 13px ui-sans-serif, system-ui, -apple-system, sans-serif; fill: #e6ebe8; }
+      .tick { font: 500 11px ui-sans-serif, system-ui, -apple-system, sans-serif; fill: #8a968e; }
+      .val { font: 600 12px ui-monospace, Menlo, monospace; fill: #e6ebe8; }
+      .val-dim { font: 600 12px ui-monospace, Menlo, monospace; fill: #8a968e; }
+      .legend { font: 500 12px ui-sans-serif, system-ui, -apple-system, sans-serif; fill: #c5cec8; }
+      .foot { font: 400 11px ui-sans-serif, system-ui, -apple-system, sans-serif; fill: #7a8780; }
+      .delta { font: 700 13px ui-monospace, Menlo, monospace; fill: #d4a574; }
+      .ok { font: 700 12px ui-monospace, Menlo, monospace; fill: #7dcea0; }
+    </style>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a0e0c"/>
+      <stop offset="100%" stop-color="#06080a"/>
+    </linearGradient>
+    <linearGradient id="whBar" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#8a6540"/>
+      <stop offset="100%" stop-color="#d4a574"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="920" height="480" fill="url(#bg)" rx="14"/>
+  <text x="40" y="36" class="title">Qwen2.5-7B · with vs without Windhover</text>
+  <text x="40" y="56" class="sub">MacBook Air M4 · 16 GB · d9 GB budget · decode-only · greedy · 2026-07-22 · measured locally</text>
+
+  <!-- Decode panel -->
+  <rect x="28" y="76" width="420" height="300" rx="12" fill="#0d1210" stroke="rgba(230,235,232,0.10)"/>
+  <text x="48" y="104" class="panel">Decode throughput (tok/s)</text>
+  <text x="424" y="104" text-anchor="end" class="delta">~780×</text>
+
+  <!-- y grid -->
+  <line x1="72" y1="140" x2="400" y2="140" stroke="rgba(230,235,232,0.06)"/>
+  <line x1="72" y1="200" x2="400" y2="200" stroke="rgba(230,235,232,0.06)"/>
+  <line x1="72" y1="260" x2="400" y2="260" stroke="rgba(230,235,232,0.06)"/>
+  <line x1="72" y1="320" x2="400" y2="320" stroke="rgba(230,235,232,0.12)"/>
+
+  <!-- Without: 0.013  draw as tiny stub so it's visible -->
+  <rect x="120" y="314" width="72" height="6" rx="3" fill="#5a6360"/>
+  <text x="156" y="306" text-anchor="middle" class="val-dim">0.013</text>
+  <text x="156" y="348" text-anchor="middle" class="tick">Without</text>
+  <text x="156" y="364" text-anchor="middle" class="foot">transformers · fp16</text>
+
+  <!-- With: 9.80  full height -->
+  <rect x="250" y="140" width="72" height="180" rx="6" fill="url(#whBar)"/>
+  <text x="286" y="132" text-anchor="middle" class="val">9.80</text>
+  <text x="286" y="348" text-anchor="middle" class="tick">Windhover</text>
+  <text x="286" y="364" text-anchor="middle" class="foot">windhover-engine · KPK</text>
+
+  <!-- RSS panel -->
+  <rect x="468" y="76" width="424" height="300" rx="12" fill="#0d1210" stroke="rgba(230,235,232,0.10)"/>
+  <text x="488" y="104" class="panel">Resident set (GB)</text>
+  <text x="868" y="104" text-anchor="end" class="foot">9 GB cap</text>
+
+  <!-- Cap line -->
+  <line x1="520" y1="150" x2="840" y2="150" stroke="#d98989" stroke-dasharray="5 4" stroke-width="1.5"/>
+  <text x="840" y="144" text-anchor="end" class="foot" fill="#d98989">9.0 GB budget</text>
+
+  <!-- Without 8.82  almost at cap; scale: 0..9 mapped to 320..150 (170px) -->
+  <!-- 8.82/9 * 170 = 166.6 ’ y = 320-166.6 = 153.4 -->
+  <rect x="560" y="154" width="72" height="166" rx="6" fill="#5a6360"/>
+  <text x="596" y="146" text-anchor="middle" class="val-dim">8.82</text>
+  <text x="596" y="348" text-anchor="middle" class="tick">Without</text>
+  <text x="596" y="364" text-anchor="middle" class="foot">swap-bound*</text>
+
+  <!-- Windhover 4.19 ’ 4.19/9 * 170 = 79.1 ’ y = 320-79 = 241 -->
+  <rect x="700" y="241" width="72" height="79" rx="6" fill="url(#whBar)"/>
+  <text x="736" y="233" text-anchor="middle" class="val">4.19</text>
+  <text x="736" y="348" text-anchor="middle" class="tick">Windhover</text>
+  <text x="736" y="364" text-anchor="middle" class="ok">fits budget</text>
+
+  <!-- Footer -->
+  <rect x="28" y="396" width="864" height="60" rx="10" fill="#0d1210" stroke="rgba(230,235,232,0.10)"/>
+  <text x="48" y="420" class="foot">* Without: historical thrash finish. Live attempt aborted at 6.44 GB RSS after +1.5 GB swap.</text>
+  <text x="48" y="440" class="foot">Same model Qwen/Qwen2.5-7B-Instruct · same Mac · NGEN=32 on Windhover · not projected.</text>
+
+  <g transform="translate(620, 428)">
+    <rect width="12" height="12" rx="2" fill="#5a6360"/>
+    <text x="18" y="11" class="legend">Without</text>
+    <rect x="90" width="12" height="12" rx="2" fill="#d4a574"/>
+    <text x="108" y="11" class="legend">Windhover</text>
+  </g>
+</svg>
