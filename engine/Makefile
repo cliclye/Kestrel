@@ -97,7 +97,7 @@ CFLAGS += -mcpu=$(ARCH)
 else
 CFLAGS += -march=$(ARCH)
 endif
-LDFLAGS = -lm -fopenmp -static -lpsapi
+LDFLAGS = -lm -fopenmp -static -lpthread -lwinpthread -lpsapi
 EXE     = .exe
 
 else

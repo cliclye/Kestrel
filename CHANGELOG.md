@@ -6,6 +6,7 @@
 - **Windows Library install crash:** `UnicodeEncodeError: 'charmap' codec can't encode character '\u2192'` during model download — UTF-8-safe stdio, HF/tqdm progress bars disabled on Windows, and ASCII-safe progress messages.
 - **Windows setup “Error opening file for writing: …\windhover-server.exe”:** NSIS preinstall hooks stop `Windhover` / `windhover-server` / `windhover-engine` and delete locked sidecars before copy.
 - **Windows app freezes ~1 minute on first launch:** backend sidecar starts on a background thread so the UI window is responsive immediately; packaged startup defers impostor cleanup until after `/health` is up.
+- **Windows release CI:** catalog smoke no longer fails on flaky `ResponseEnded`; JSON catalog/meta reads always use UTF-8; WinARM engine links `winpthread` for static OpenMP builds.
 
 ## [0.3.1] — 2026-07-22
 

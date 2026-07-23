@@ -120,21 +120,41 @@ jobs:
           WINDHOVER_PORT: "8000"
           WINDHOVER_APP_NO_AUTOPULL: "1"
           WINDHOVER_ENGINE: ${{ github.workspace }}\desktop\src-tauri\binaries\windhover-engine-${{ matrix.triple }}.exe
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
         run: |
           $server = Join-Path $env:GITHUB_WORKSPACE "packaging\dist\windhover-server.exe"
           if (-not (Test-Path $server)) { throw "missing $server" }
-          $proc = Start-Process -FilePath $server -PassThru -WindowStyle Hidden
+          $log = Join-Path $env:RUNNER_TEMP "windhover-server-smoke.log"
+          $proc = Start-Process -FilePath $server -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput $log -RedirectStandardError $log
           try {
             $ok = $false
-            for ($i = 0; $i -lt 60; $i++) {
+            for ($i = 0; $i -lt 90; $i++) {
               try {
-                $r = Invoke-WebRequest -Uri "http://127.0.0.1:8000/health" -UseBasicParsing -TimeoutSec 2
+                $r = Invoke-WebRequest -Uri "http://127.0.0.1:8000/health" -UseBasicParsing -TimeoutSec 3
                 if ($r.StatusCode -eq 200 -and $r.Content -match '"ok"') { $ok = $true; break }
               } catch { Start-Sleep -Milliseconds 250 }
             }
-            if (-not $ok) { throw "health check failed" }
-            $cat = Invoke-WebRequest -Uri "http://127.0.0.1:8000/v1/catalog" -UseBasicParsing -TimeoutSec 5
-            if ($cat.StatusCode -ne 200) { throw "catalog status $($cat.StatusCode)" }
+            if (-not $ok) {
+              if (Test-Path $log) { Get-Content $log -Tail 80 | Write-Host }
+              throw "health check failed"
+            }
+            # Retry catalog: Invoke-WebRequest on Windows sometimes reports ResponseEnded
+            # on the first hit even when the server is fine.
+            $catOk = $false
+            for ($i = 0; $i -lt 40; $i++) {
+              try {
+                $cat = Invoke-WebRequest -Uri "http://127.0.0.1:8000/v1/catalog" -UseBasicParsing -TimeoutSec 15
+                if ($cat.StatusCode -eq 200 -and $cat.Content -match '"models"') { $catOk = $true; break }
+              } catch {
+                Start-Sleep -Milliseconds 300
+              }
+            }
+            if (-not $catOk) {
+              if (Test-Path $log) { Get-Content $log -Tail 80 | Write-Host }
+              throw "catalog check failed"
+            }
             Write-Host "server smoke ok"
           } finally {
             if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
@@ -185,13 +205,21 @@ jobs:
             $proc = Start-Process -FilePath $sidecar.FullName -PassThru -WindowStyle Hidden
             try {
               $ok = $false
-              for ($i = 0; $i -lt 60; $i++) {
+              for ($i = 0; $i -lt 90; $i++) {
                 try {
-                  $r = Invoke-WebRequest -Uri "http://127.0.0.1:8001/v1/catalog" -UseBasicParsing -TimeoutSec 2
-                  if ($r.StatusCode -eq 200) { $ok = $true; break }
+                  $r = Invoke-WebRequest -Uri "http://127.0.0.1:8001/health" -UseBasicParsing -TimeoutSec 3
+                  if ($r.StatusCode -eq 200 -and $r.Content -match '"ok"') { $ok = $true; break }
                 } catch { Start-Sleep -Milliseconds 250 }
               }
-              if (-not $ok) { throw "installed sidecar catalog check failed" }
+              if (-not $ok) { throw "installed sidecar health check failed" }
+              $catOk = $false
+              for ($i = 0; $i -lt 40; $i++) {
+                try {
+                  $r = Invoke-WebRequest -Uri "http://127.0.0.1:8001/v1/catalog" -UseBasicParsing -TimeoutSec 15
+                  if ($r.StatusCode -eq 200 -and $r.Content -match '"models"') { $catOk = $true; break }
+                } catch { Start-Sleep -Milliseconds 300 }
+              }
+              if (-not $catOk) { throw "installed sidecar catalog check failed" }
               Write-Host "installer sidecar smoke ok"
             } finally {
               if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
