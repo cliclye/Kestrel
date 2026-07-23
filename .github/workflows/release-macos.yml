@@ -19,7 +19,7 @@ on:
       tag:
         description: "GitHub Release tag to upload into (e.g. v0.1.0)"
         required: true
-        default: "v0.3.9"
+        default: "v0.3.10"
 
 permissions:
   contents: write
@@ -118,7 +118,7 @@ jobs:
           make_latest: true
           generate_release_notes: true
           body: |
-            ## Windhover 0.3.9
+            ## Windhover 0.3.10
 
             In-app updates from GitHub Releases; Windows Chat no longer requires torch after Library download. See [CHANGELOG.md](https://github.com/cliclye/Windhover/blob/main/CHANGELOG.md).
 
@@ -135,7 +135,7 @@ jobs:
             - **macOS:** if Gatekeeper says the app is **“damaged”**, run `xattr -cr /Applications/Windhover.app` (not a corrupt download — see [docs/DOWNLOAD.md](https://github.com/cliclye/Windhover/blob/main/docs/DOWNLOAD.md))
             - **Windows:** unsigned — SmartScreen may require More info → Run anyway
 
-            ### What's new (0.3.9)
+            ### What's new (0.3.10)
             - Windows: Phi-4/Gemma engine prepare runs in background with progress (no hard fail)
             - Windows: UI layout + prior torch/hub fixes
             - Windows: Chat after Library install uses windhover-engine (no `pip install torch`)

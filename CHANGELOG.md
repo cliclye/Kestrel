@@ -1,6 +1,11 @@
 # Changelog
 
-## [0.3.9] — 2026-07-23
+## [0.3.10] — 2026-07-23
+
+### Catalog
+- **Engine-truth audit:** only models Windhover can actually run stay installable. Gemma 4 / Qwen3.5–3.6 hybrid / Llama 4 / Kimi K2.x / DeepSeek V4 / MiniMax M3 / broken HF ids are marked `soon` + blocked.
+- Ready list is Qwen2.5/3 dense + SmolLM2 + DeepSeek R1 Distill (chat immediately after download) and Phi-4 Mini (install finishes with KPK convert). Same paths on Mac and Windows.
+- Added `tools/catalog_engine_audit.py` to verify HF `model_type` vs engine support before release.
 
 ### Bugs fixed
 - **Windows Phi-4 / Gemma engine prepare:** first chat no longer hard-fails while converting. Convert runs in the background with progress; install fails clearly if Phi/Gemma KPK convert fails; Chat returns `engine_preparing` and the UI polls until ready.

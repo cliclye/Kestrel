@@ -34,6 +34,13 @@ KPK convert via `numpy` + `safetensors`. Lazy imports are **invisible** to Analy
 - [ ] App version in `app/package.json` + `tauri.conf.json` matches the GitHub tag.
 - [ ] `/v1/update` returns `available: true` when a newer tag exists (smoke after tag).
 
+## Catalog vs engine
+
+- [ ] `python3 tools/catalog_engine_audit.py` exits 0 (no installable model with an
+      unsupported HF `model_type`).
+- [ ] Ready models are only dense-immediate (qwen2/3/llama/mistral) or Phi/Gemma2/3
+      with install-time KPK convert.
+
 ## Do not
 
 - Redirect `Start-Process` stdout **and** stderr to the **same** log file on Windows
