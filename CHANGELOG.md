@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.4] — 2026-07-23
+
+### Bugs fixed
+- **Windows Library download `ModuleNotFoundError: No module named 'huggingface_hub'`:** package `huggingface_hub` (and deps) into the `windhover-server` PyInstaller sidecar so Install from Library works without a system Python.
+
 ## [0.3.3] — 2026-07-23
 
 ### Bugs fixed

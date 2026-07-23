@@ -168,7 +168,7 @@ jobs:
           npm ci
           npm run build
           Pop-Location
-          python -m pip install -q pyinstaller
+          python -m pip install -q pyinstaller "huggingface_hub>=0.23"
           powershell -File packaging/build_sidecar.ps1 -Triple x86_64-pc-windows-msvc
           $server = "packaging\dist\windhover-server.exe"
           $eng = "engine\windhover-engine.exe"

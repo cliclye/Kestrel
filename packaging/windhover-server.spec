@@ -8,6 +8,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_all
+
 # SPECPATH is the directory that contains this .spec (packaging/), not the file path.
 ROOT = Path(SPECPATH).resolve()  # packaging/
 REPO = ROOT.parent
@@ -29,6 +31,11 @@ datas = [
     (str(REPO / "tools" / "agent_workspace.py"), "tools"),
 ]
 
+# Library downloads need huggingface_hub inside the frozen sidecar (Windows/Mac).
+# Lazy imports in windhover are invisible to Analysis — collect the package explicitly.
+_hf_datas, _hf_binaries, _hf_hidden = collect_all("huggingface_hub")
+datas += _hf_datas
+
 # Optional icon for Windows
 icon = None
 ico = REPO / "desktop" / "src-tauri" / "icons" / "icon.ico"
@@ -38,11 +45,24 @@ if ico.is_file() and sys.platform == "win32":
 a = Analysis(
     [str(ROOT / "server_entry.py")],
     pathex=[str(REPO), str(ROOT)],
-    binaries=[],
+    binaries=_hf_binaries,
     datas=datas,
     hiddenimports=[
         "bundled_windhover",
         "agent_workspace",
+        "huggingface_hub",
+        "huggingface_hub.file_download",
+        "huggingface_hub.hf_api",
+        "huggingface_hub.utils",
+        "filelock",
+        "fsspec",
+        "packaging",
+        "packaging.version",
+        "requests",
+        "tqdm",
+        "tqdm.auto",
+        "yaml",
+        "typing_extensions",
         "http.server",
         "http.client",
         "urllib.parse",
@@ -62,7 +82,8 @@ a = Analysis(
         "secrets",
         "gzip",
         "concurrent.futures",
-    ],
+    ]
+    + list(_hf_hidden),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[str(ROOT / "pyi_rth_windhover_utf8.py")],

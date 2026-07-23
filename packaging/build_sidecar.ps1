@@ -15,7 +15,9 @@ if (-not (Test-Path "app/dist/index.html")) {
   Pop-Location
 }
 
-python -m pip install -q pyinstaller
+python -m pip install -q pyinstaller "huggingface_hub>=0.23"
+# Fail fast if hub is missing — Library downloads need it inside the frozen sidecar.
+python -c "import huggingface_hub; print('huggingface_hub', huggingface_hub.__version__)"
 python -m PyInstaller packaging/windhover-server.spec --noconfirm --distpath packaging/dist --workpath packaging/build
 
 $BinDir = Join-Path $Root "desktop/src-tauri/binaries"

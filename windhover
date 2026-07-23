@@ -352,19 +352,34 @@ def _clean_chat_text(text: str, *, soft: bool = False) -> str:
 
 
 def _ensure_hf_hub() -> None:
-    """Make huggingface_hub importable (prefer project venv)."""
+    """Make huggingface_hub importable (prefer project venv; bundled in frozen app)."""
     try:
         import huggingface_hub  # noqa: F401
 
         return
     except ImportError:
         pass
+    if getattr(sys, "frozen", False):
+        raise ImportError(
+            "huggingface_hub is missing from this Windhover build. "
+            "Reinstall the latest Windhover release (Library downloads need it bundled)."
+        )
     venv = C_DIR / ".venv"
     for site in sorted(venv.glob("lib/python*/site-packages")):
         s = str(site)
         if site.is_dir() and s not in sys.path:
             sys.path.insert(0, s)
-    import huggingface_hub  # noqa: F401
+    for site in sorted(venv.glob("Lib/site-packages")):
+        s = str(site)
+        if site.is_dir() and s not in sys.path:
+            sys.path.insert(0, s)
+    try:
+        import huggingface_hub  # noqa: F401
+    except ImportError as e:
+        raise ImportError(
+            "huggingface_hub is required for Library downloads. "
+            "Install it with: pip install huggingface_hub"
+        ) from e
 
 
 def _fmt_bytes(n: float) -> str:

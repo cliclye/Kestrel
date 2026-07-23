@@ -13,7 +13,8 @@ if [[ ! -d app/dist ]]; then
   (cd app && npm ci && npm run build)
 fi
 
-python3 -m pip install -q pyinstaller
+python3 -m pip install -q pyinstaller "huggingface_hub>=0.23"
+python3 -c "import huggingface_hub; print('huggingface_hub', huggingface_hub.__version__)"
 python3 -m PyInstaller packaging/windhover-server.spec --noconfirm --distpath packaging/dist --workpath packaging/build
 
 BIN_DIR="$ROOT/desktop/src-tauri/binaries"
