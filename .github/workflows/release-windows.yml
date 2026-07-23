@@ -125,36 +125,34 @@ jobs:
         run: |
           $server = Join-Path $env:GITHUB_WORKSPACE "packaging\dist\windhover-server.exe"
           if (-not (Test-Path $server)) { throw "missing $server" }
-          $log = Join-Path $env:RUNNER_TEMP "windhover-server-smoke.log"
-          $proc = Start-Process -FilePath $server -PassThru -WindowStyle Hidden `
-            -RedirectStandardOutput $log -RedirectStandardError $log
+          # Do NOT RedirectStandardOutput+Error to the same file — Start-Process
+          # fails immediately on Windows when both point at one path.
+          $proc = Start-Process -FilePath $server -PassThru -WindowStyle Hidden
           try {
             $ok = $false
             for ($i = 0; $i -lt 90; $i++) {
+              if ($proc.HasExited) {
+                throw "windhover-server exited early code=$($proc.ExitCode)"
+              }
               try {
-                $r = Invoke-WebRequest -Uri "http://127.0.0.1:8000/health" -UseBasicParsing -TimeoutSec 3
-                if ($r.StatusCode -eq 200 -and $r.Content -match '"ok"') { $ok = $true; break }
-              } catch { Start-Sleep -Milliseconds 250 }
+                # curl.exe is more reliable than Invoke-WebRequest on GHA Windows
+                # (IWR often reports ResponseEnded on keep-alive / HTTP/1.0 quirks).
+                $body = & curl.exe -sS --max-time 3 "http://127.0.0.1:8000/health" 2>$null
+                if ($LASTEXITCODE -eq 0 -and $body -match '"ok"') { $ok = $true; break }
+              } catch { }
+              Start-Sleep -Milliseconds 250
             }
-            if (-not $ok) {
-              if (Test-Path $log) { Get-Content $log -Tail 80 | Write-Host }
-              throw "health check failed"
-            }
-            # Retry catalog: Invoke-WebRequest on Windows sometimes reports ResponseEnded
-            # on the first hit even when the server is fine.
+            if (-not $ok) { throw "health check failed" }
+
             $catOk = $false
             for ($i = 0; $i -lt 40; $i++) {
               try {
-                $cat = Invoke-WebRequest -Uri "http://127.0.0.1:8000/v1/catalog" -UseBasicParsing -TimeoutSec 15
-                if ($cat.StatusCode -eq 200 -and $cat.Content -match '"models"') { $catOk = $true; break }
-              } catch {
-                Start-Sleep -Milliseconds 300
-              }
+                $body = & curl.exe -sS --max-time 10 "http://127.0.0.1:8000/v1/catalog" 2>$null
+                if ($LASTEXITCODE -eq 0 -and $body -match '"models"') { $catOk = $true; break }
+              } catch { }
+              Start-Sleep -Milliseconds 250
             }
-            if (-not $catOk) {
-              if (Test-Path $log) { Get-Content $log -Tail 80 | Write-Host }
-              throw "catalog check failed"
-            }
+            if (-not $catOk) { throw "catalog check failed" }
             Write-Host "server smoke ok"
           } finally {
             if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
@@ -206,18 +204,21 @@ jobs:
             try {
               $ok = $false
               for ($i = 0; $i -lt 90; $i++) {
+                if ($proc.HasExited) { throw "installed sidecar exited early code=$($proc.ExitCode)" }
                 try {
-                  $r = Invoke-WebRequest -Uri "http://127.0.0.1:8001/health" -UseBasicParsing -TimeoutSec 3
-                  if ($r.StatusCode -eq 200 -and $r.Content -match '"ok"') { $ok = $true; break }
-                } catch { Start-Sleep -Milliseconds 250 }
+                  $body = & curl.exe -sS --max-time 3 "http://127.0.0.1:8001/health" 2>$null
+                  if ($LASTEXITCODE -eq 0 -and $body -match '"ok"') { $ok = $true; break }
+                } catch { }
+                Start-Sleep -Milliseconds 250
               }
               if (-not $ok) { throw "installed sidecar health check failed" }
               $catOk = $false
               for ($i = 0; $i -lt 40; $i++) {
                 try {
-                  $r = Invoke-WebRequest -Uri "http://127.0.0.1:8001/v1/catalog" -UseBasicParsing -TimeoutSec 15
-                  if ($r.StatusCode -eq 200 -and $r.Content -match '"models"') { $catOk = $true; break }
-                } catch { Start-Sleep -Milliseconds 300 }
+                  $body = & curl.exe -sS --max-time 10 "http://127.0.0.1:8001/v1/catalog" 2>$null
+                  if ($LASTEXITCODE -eq 0 -and $body -match '"models"') { $catOk = $true; break }
+                } catch { }
+                Start-Sleep -Milliseconds 250
               }
               if (-not $catOk) { throw "installed sidecar catalog check failed" }
               Write-Host "installer sidecar smoke ok"
