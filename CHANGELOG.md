@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.7] — 2026-07-23
+
+### Bugs fixed
+- **Windows Phi-4 “KPK convert failed”:** torch-free safetensors BF16 reads were returning flat arrays, which broke Phi’s fused `qkv` / `gate_up` split during convert. Tensor shapes are restored from the safetensors header so Phi-4 Mini converts and chats via windhover-engine without torch.
+
 ## [0.3.6] — 2026-07-23
 
 ### App

@@ -274,6 +274,7 @@ _PULL_JOBS: dict[str, dict] = {}
 _PULL_LOCK = threading.Lock()
 _UPDATE_CACHE: dict = {"checked_at": 0.0, "payload": None}
 _UPDATE_LOCK = threading.Lock()
+_LAST_CONVERT_ERROR: str | None = None
 _WORKSPACE: dict = {"root": None}  # user-selected coding folder for Agent tab
 sys.path.insert(0, str(ROOT / "tools"))
 try:
@@ -317,7 +318,7 @@ def _app_version() -> str:
                 return str(ver).lstrip("v")
         except Exception:
             continue
-    return os.environ.get("WINDHOVER_VERSION", "0.3.6").lstrip("v")
+    return os.environ.get("WINDHOVER_VERSION", "0.3.7").lstrip("v")
 
 
 def _parse_semver(v: str) -> tuple[int, int, int]:
@@ -898,14 +899,20 @@ def _windhover_supported(snap: Path) -> bool:
     return mt in ("qwen2", "qwen3", "llama", "mistral", "gemma2", "gemma3", "phi3")
 
 
+_LAST_CONVERT_ERROR: str | None = None
+
+
 def _kpk_convert(snap: Path, job_id: str | None = None) -> bool:
     """Run the one-time Windhover convert (quant + calibrate + AWQ). ~1-2 min/GB.
 
     Packaged apps (frozen / no torch) convert in-process with --no-calib/--no-awq
     using numpy + safetensors only.
     """
+    global _LAST_CONVERT_ERROR
+    _LAST_CONVERT_ERROR = None
     tool = ROOT / "tools" / "kestrel_pack.py"
     if os.environ.get("WINDHOVER_NO_KPK") or os.environ.get("KESTREL_NO_KPK"):
+        _LAST_CONVERT_ERROR = "KPK convert disabled (WINDHOVER_NO_KPK)."
         return False
     if _has_kpk(snap):
         return True
@@ -923,12 +930,28 @@ def _kpk_convert(snap: Path, job_id: str | None = None) -> bool:
                 sys.path.insert(0, tools_dir)
             import kestrel_pack as kp  # type: ignore
 
-            outdir = str(snap / "kpk")
+            outdir_path = snap / "kpk"
+            # Clear a half-written pack from a previous failed convert.
+            if outdir_path.is_dir() and not _has_kpk(snap):
+                shutil.rmtree(outdir_path, ignore_errors=True)
+            outdir = str(outdir_path)
             # No torch in the sidecar: skip calibration / AWQ (still a valid KPK).
             kp.convert(str(snap), outdir, awq=False, calib=False)
-            return _has_kpk(snap)
+            ok = _has_kpk(snap)
+            if not ok:
+                _LAST_CONVERT_ERROR = (
+                    "KPK convert finished but kestrel.json is missing a windhover block."
+                )
+            return ok
         except Exception as e:
-            sys.stderr.write(f"[windhover] in-process KPK convert failed: {type(e).__name__}: {e}\n")
+            _LAST_CONVERT_ERROR = f"{type(e).__name__}: {e}"
+            sys.stderr.write(f"[windhover] in-process KPK convert failed: {_LAST_CONVERT_ERROR}\n")
+            # Don't leave a broken kpk/ that blocks retries.
+            try:
+                if (snap / "kpk").is_dir() and not _has_kpk(snap):
+                    shutil.rmtree(snap / "kpk", ignore_errors=True)
+            except Exception:
+                pass
             return False
 
     py = _ml_python()
@@ -938,7 +961,10 @@ def _kpk_convert(snap: Path, job_id: str | None = None) -> bool:
         rc = subprocess.call(
             [py, str(tool), "--snap", str(snap), "--no-calib", "--no-awq"]
         )
-    return rc == 0 and _has_kpk(snap)
+    ok = rc == 0 and _has_kpk(snap)
+    if not ok:
+        _LAST_CONVERT_ERROR = f"kestrel_pack exited with code {rc}"
+    return ok
 
 
 def _ensure_engine_pack(snap: Path) -> bool:
@@ -1385,9 +1411,14 @@ def _agent_run(
             if _transformers_available() and _has_real_weights(snap):
                 mode = "preview"
             else:
+                detail = _LAST_CONVERT_ERROR or "unknown convert error"
                 return {
                     "ok": False,
-                    "error": "engine could not prepare this model (KPK convert failed)",
+                    "error": (
+                        "Engine could not prepare this model (KPK convert failed). "
+                        f"{detail}"
+                    ),
+                    "detail": detail,
                     "code": "engine_inactive",
                 }
 
@@ -3016,8 +3047,11 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
                             503,
                             _engine_inactive_payload(
                                 "Windhover engine could not prepare this model for chat "
-                                "(KPK convert failed and torch/transformers are not available). "
-                                "Re-install from Library or check the server log."
+                                "(KPK convert failed). "
+                                "First chat after install converts Phi/Gemma weights once "
+                                "(may take several minutes). If it keeps failing, re-install "
+                                "from Library or check the server log.",
+                                detail=_LAST_CONVERT_ERROR,
                             ),
                         )
                     prompt = ""

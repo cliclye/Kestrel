@@ -118,7 +118,7 @@ jobs:
           make_latest: true
           generate_release_notes: true
           body: |
-            ## Windhover 0.3.6
+            ## Windhover 0.3.7
 
             In-app updates from GitHub Releases; Windows Chat no longer requires torch after Library download. See [CHANGELOG.md](https://github.com/cliclye/Windhover/blob/main/CHANGELOG.md).
 
@@ -135,7 +135,7 @@ jobs:
             - **macOS:** if Gatekeeper says the app is **“damaged”**, run `xattr -cr /Applications/Windhover.app` (not a corrupt download — see [docs/DOWNLOAD.md](https://github.com/cliclye/Windhover/blob/main/docs/DOWNLOAD.md))
             - **Windows:** unsigned — SmartScreen may require More info → Run anyway
 
-            ### What's new (0.3.6)
+            ### What's new (0.3.7)
             - Windows: Chat after Library install uses windhover-engine (no `pip install torch`)
             - Windows: torch-free KPK convert (numpy/safetensors) for Phi/Gemma packs
             - Packaging selfcheck covers download + convert + chat routing

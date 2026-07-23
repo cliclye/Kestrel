@@ -135,9 +135,9 @@ def build_descriptor(cfg):
     mt = cfg.get("model_type", "")
     raw = json.dumps(cfg)
     if any(m in raw for m in MOE_MARKERS):
-        raise SystemExit("kpk: MoE packs use the engine's MoE convert path, not kestrel_pack")
+        raise RuntimeError("kpk: MoE packs use the engine's MoE convert path, not kestrel_pack")
     if mt not in ARCHES:
-        raise SystemExit(f"kpk: unsupported model_type '{mt}' "
+        raise RuntimeError(f"kpk: unsupported model_type '{mt}' "
                          f"(supported: {', '.join(sorted(ARCHES))})")
     d = dict(ARCHES[mt])
     d["model_type"] = mt
@@ -254,7 +254,7 @@ def load_shards(snap):
     from safetensors import safe_open
     files = sorted(f for f in os.listdir(snap) if f.endswith(".safetensors"))
     if not files:
-        raise SystemExit(f"kpk: no safetensors in {snap}")
+        raise RuntimeError(f"kpk: no safetensors in {snap}")
     tensors = {}
     for f in files:
         with safe_open(os.path.join(snap, f), framework="np") as sf:
@@ -269,25 +269,49 @@ def _bf16_u16_to_f32(u16):
     return bits.view(np.float32)
 
 
+def _safetensors_header_entry(path, key):
+    """Return (header_entry dict, data_offset) for one tensor."""
+    with open(path, "rb") as f:
+        n = int.from_bytes(f.read(8), "little")
+        header = json.loads(f.read(n).decode("utf-8"))
+    if key not in header:
+        raise KeyError(f"kpk: tensor {key!r} missing from {path}")
+    return header[key], 8 + n
+
+
+def _reshape_weight(arr, shape):
+    flat = np.ascontiguousarray(arr).reshape(-1)
+    expect = 1
+    for d in shape:
+        expect *= int(d)
+    if flat.size != expect:
+        raise RuntimeError(
+            f"kpk: tensor size mismatch: got {flat.size} values, shape {shape} needs {expect}"
+        )
+    return flat.reshape(tuple(int(d) for d in shape))
+
+
 def read_tensor(snap, fname, key):
-    """Load one tensor as float32.
+    """Load one tensor as float32 with its on-disk shape.
 
     Prefers numpy / ml_dtypes so packaged Windows sidecars can convert without
-    torch. Falls back to torch only when BF16 cannot be decoded otherwise.
+    torch. Falls back to torch, then a manual BF16/F16/F32 decode. Always
+    restores the safetensors shape (critical for Phi fused qkv / gate_up).
     """
     from safetensors import safe_open
 
     path = os.path.join(snap, fname)
+    info, data_off = _safetensors_header_entry(path, key)
+    shape = tuple(info.get("shape") or ())
+    dtype = info.get("dtype")
+
     # 1) numpy path (F32/F16; BF16 when ml_dtypes is installed)
     try:
         with safe_open(path, framework="np") as sf:
             t = sf.get_tensor(key)
         if t.dtype == np.float32:
-            return np.ascontiguousarray(t)
-        if t.dtype == np.float16:
-            return np.ascontiguousarray(t.astype(np.float32))
-        # ml_dtypes.bfloat16 or similar
-        return np.ascontiguousarray(t.astype(np.float32))
+            return _reshape_weight(t, shape) if shape else np.ascontiguousarray(t)
+        return _reshape_weight(t.astype(np.float32), shape)
     except Exception:
         pass
 
@@ -297,27 +321,27 @@ def read_tensor(snap, fname, key):
 
         with safe_open(path, framework="pt") as sf:
             t = sf.get_tensor(key)
-        return t.float().numpy()
+        return _reshape_weight(t.float().numpy(), shape)
     except Exception:
         pass
 
     # 3) Manual BF16/F16/F32 via header offsets (no torch / no ml_dtypes)
+    begin, end = info["data_offsets"]
     with open(path, "rb") as f:
-        n = int.from_bytes(f.read(8), "little")
-        header = json.loads(f.read(n).decode("utf-8"))
-        info = header[key]
-        dtype = info["dtype"]
-        begin, end = info["data_offsets"]
-        f.seek(8 + n + begin)
+        f.seek(data_off + begin)
         raw = f.read(end - begin)
     if dtype == "BF16":
         u16 = np.frombuffer(raw, dtype="<u2")
-        return np.ascontiguousarray(_bf16_u16_to_f32(u16))
-    if dtype == "F16":
-        return np.ascontiguousarray(np.frombuffer(raw, dtype="<f2").astype(np.float32))
-    if dtype == "F32":
-        return np.ascontiguousarray(np.frombuffer(raw, dtype="<f4"))
-    raise RuntimeError(f"kpk: unsupported dtype {dtype} for {key} (install torch or ml_dtypes)")
+        arr = _bf16_u16_to_f32(u16)
+    elif dtype == "F16":
+        arr = np.frombuffer(raw, dtype="<f2").astype(np.float32)
+    elif dtype == "F32":
+        arr = np.frombuffer(raw, dtype="<f4")
+    else:
+        raise RuntimeError(
+            f"kpk: unsupported dtype {dtype} for {key} (install torch or ml_dtypes)"
+        )
+    return _reshape_weight(arr, shape)
 
 
 def convert(snap, outdir, awq=True, calib=True, attn_bits=8, lm_bits=8):
@@ -388,12 +412,12 @@ def convert(snap, outdir, awq=True, calib=True, attn_bits=8, lm_bits=8):
     # --- embeddings / lm_head ---
     emb = get("model.embed_tokens.weight")
     if emb is None:
-        raise SystemExit("kpk: missing embed_tokens")
+        raise RuntimeError("kpk: missing embed_tokens")
     put_i8("model.embed_tokens.weight", emb)
     lm = get("lm_head.weight")
     if lm is None:
         if not desc["tie_embeddings"]:
-            raise SystemExit("kpk: missing lm_head and not tied")
+            raise RuntimeError("kpk: missing lm_head and not tied")
         lm = emb
     # lm_head always written separately (untied on disk; G2: tied int4 corrupts embeds)
     if lm_bits == 4:
@@ -404,7 +428,7 @@ def convert(snap, outdir, awq=True, calib=True, attn_bits=8, lm_bits=8):
 
     fn = get("model.norm.weight")
     if fn is None:
-        raise SystemExit("kpk: missing final norm")
+        raise RuntimeError("kpk: missing final norm")
     out["model.norm.weight"] = fn
 
     prefix = "model.layers.{i}."
@@ -421,14 +445,21 @@ def convert(snap, outdir, awq=True, calib=True, attn_bits=8, lm_bits=8):
         wd = get(p + "mlp.down_proj.weight")
         if desc.get("fused_qkv") and wq is None:
             qkv = get(p + "self_attn.qkv_proj.weight")
+            if qkv is None:
+                raise RuntimeError(f"kpk: layer {i} missing fused qkv_proj")
+            # Phi stores [q|k|v, hidden]; keep 2D even if a loader returned flat.
+            qkv = np.ascontiguousarray(qkv).reshape(-1, D)
             wq = qkv[: H * hd]
             wk = qkv[H * hd: H * hd + KV * hd]
             wv = qkv[H * hd + KV * hd:]
         if desc.get("fused_gate_up") and wg is None:
             gu = get(p + "mlp.gate_up_proj.weight")
+            if gu is None:
+                raise RuntimeError(f"kpk: layer {i} missing fused gate_up_proj")
+            gu = np.ascontiguousarray(gu).reshape(-1, D)
             wg, wu = gu[:I], gu[I:]
         if any(t is None for t in (in_ln, post_ln, wq, wk, wv, wo, wg, wu, wd)):
-            raise SystemExit(f"kpk: layer {i} missing tensors")
+            raise RuntimeError(f"kpk: layer {i} missing tensors")
 
         # --- exact AWQ folding ---
         # qkv: scale s folds out of input_layernorm weight
