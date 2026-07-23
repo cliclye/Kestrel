@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.2] — 2026-07-23
+## [0.3.3] — 2026-07-23
 
 ### Bugs fixed
 - **Windows Library install crash:** `UnicodeEncodeError: 'charmap' codec can't encode character '\u2192'` during model download — UTF-8-safe stdio, HF/tqdm progress bars disabled on Windows, and ASCII-safe progress messages.

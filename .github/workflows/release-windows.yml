@@ -17,7 +17,7 @@ on:
       tag:
         description: "GitHub Release tag to upload into (e.g. v0.1.0)"
         required: true
-        default: "v0.3.2"
+        default: "v0.3.3"
 
 permissions:
   contents: write
@@ -245,7 +245,7 @@ jobs:
           make_latest: true
           generate_release_notes: true
           body: |
-            ## Windhover 0.3.2
+            ## Windhover 0.3.3
 
             Windows reliability fixes for Library downloads, NSIS upgrades, and first-launch UI. See [CHANGELOG.md](https://github.com/cliclye/Windhover/blob/main/CHANGELOG.md).
 
@@ -262,7 +262,7 @@ jobs:
             - **macOS:** unsigned — Gatekeeper may require Open Anyway ([docs/DOWNLOAD.md](https://github.com/cliclye/Windhover/blob/main/docs/DOWNLOAD.md)).
             - **Windows:** unsigned — SmartScreen may require More info → Run anyway.
 
-            ### What's new (0.3.2)
+            ### What's new (0.3.3)
             - Windows: fix Library download UnicodeEncodeError (charmap / U+2192)
             - Windows: NSIS kills locked windhover-server.exe before install/upgrade
             - Windows: app UI no longer freezes ~1 minute waiting on sidecar startup
