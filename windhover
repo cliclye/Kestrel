@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import shutil
@@ -31,23 +32,99 @@ from urllib.parse import parse_qs, urlparse
 
 # Windows consoles default to a legacy code page (cp1252/charmap). Progress
 # messages and huggingface_hub/tqdm use Unicode (e.g. U+2192 "→"), which raises
-# UnicodeEncodeError and aborts Library downloads. Force UTF-8 early.
+# UnicodeEncodeError and aborts Library downloads. Force UTF-8 early and wrap
+# stdio so a failed reconfigure can never crash a pull.
 os.environ.setdefault("PYTHONUTF8", "1")
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+if sys.platform == "win32":
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    os.environ.setdefault("TQDM_DISABLE", "1")
+
+
+class _SafeTextIO:
+    """Text stream wrapper that never raises UnicodeEncodeError on write."""
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    @property
+    def encoding(self) -> str:
+        if self._stream is None:
+            return "utf-8"
+        return getattr(self._stream, "encoding", None) or "utf-8"
+
+    def write(self, s):
+        if self._stream is None:
+            return 0 if s is None else len(s)
+        if not isinstance(s, str):
+            return self._stream.write(s)
+        try:
+            return self._stream.write(s)
+        except UnicodeEncodeError:
+            enc = self.encoding
+            safe = s.encode(enc, errors="replace").decode(enc, errors="replace")
+            return self._stream.write(safe)
+
+    def writelines(self, lines):
+        for line in lines:
+            self.write(line)
+
+    def flush(self):
+        if self._stream is not None and hasattr(self._stream, "flush"):
+            self._stream.flush()
+
+    def reconfigure(self, *args, **kwargs):
+        if self._stream is not None and hasattr(self._stream, "reconfigure"):
+            return self._stream.reconfigure(*args, **kwargs)
+        return None
+
+    def isatty(self):
+        if self._stream is None:
+            return False
+        try:
+            return bool(self._stream.isatty())
+        except Exception:
+            return False
+
+    def fileno(self):
+        if self._stream is None:
+            raise io.UnsupportedOperation("fileno")
+        return self._stream.fileno()
+
+    def __getattr__(self, name):
+        if self._stream is None:
+            raise AttributeError(name)
+        return getattr(self._stream, name)
+
+
+class _NullTextIO(io.TextIOBase):
+    """Sink for windowed PyInstaller builds where stdout/stderr are None."""
+
+    encoding = "utf-8"
+
+    def write(self, s):
+        return 0 if s is None else len(s)
+
+    def flush(self):
+        return None
 
 
 def _configure_stdio_utf8() -> None:
-    """Make stdout/stderr UTF-8 so download progress cannot crash on Windows."""
-    for stream in (sys.stdout, sys.stderr):
+    """Make stdout/stderr UTF-8-safe so download progress cannot crash on Windows."""
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
         if stream is None:
+            setattr(sys, name, _SafeTextIO(_NullTextIO()))
+            continue
+        if isinstance(stream, _SafeTextIO):
             continue
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, OSError, ValueError):
             pass
+        # Always wrap: reconfigure is a no-op on some redirected/legacy handles.
+        setattr(sys, name, _SafeTextIO(stream))
     if sys.platform == "win32":
-        # Avoid HF/tqdm Unicode progress glyphs on broken/legacy consoles.
-        os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
         try:
             import ctypes
 
@@ -548,7 +625,7 @@ def _kpk_convert(snap: Path, job_id: str | None = None) -> bool:
     if _has_kpk(snap):
         return True
     if job_id:
-        _job_set(job_id, status="running", pct=98, message="Windhover convert (int4-g64 + calibrate)…")
+        _job_set(job_id, status="running", pct=98, message="Windhover convert (int4-g64 + calibrate)...")
     print("running Windhover convert (one-time quantize + calibrate)...")
     py = _ml_python()
     rc = subprocess.call([py, str(tool), "--snap", str(snap)])
@@ -1506,7 +1583,7 @@ def _hf_snapshot_download(
                 status="running",
                 pct=1,
                 bytes=0,
-                message=f"Connecting to Hugging Face ({repo})…",
+                message=f"Connecting to Hugging Face ({repo})...",
             )
         mon = threading.Thread(target=monitor, daemon=True)
         mon.start()
@@ -1515,6 +1592,8 @@ def _hf_snapshot_download(
             # silently fill ~/.cache and double-consume disk on copy.
             cache_dir = MODELS_DIR / ".hf-cache"
             cache_dir.mkdir(parents=True, exist_ok=True)
+            # Re-wrap stdio right before HF I/O — libraries may reset handlers.
+            _configure_stdio_utf8()
             snapshot_download(
                 repo_id=repo,
                 local_dir=str(dest),
@@ -1532,7 +1611,7 @@ def _hf_snapshot_download(
                 status="running",
                 pct=97,
                 bytes=cur,
-                message=f"Verifying download ({_fmt_bytes(cur)})…",
+                message=f"Verifying download ({_fmt_bytes(cur)})...",
             )
     except OSError as e:
         if getattr(e, "errno", None) == 28:
@@ -1545,6 +1624,8 @@ def _hf_snapshot_download(
 
 
 def cmd_pull(ns: argparse.Namespace) -> int:
+    # Re-assert safe stdio: Windows pull threads/sidecars can inherit cp1252 handles.
+    _configure_stdio_utf8()
     catalog = {m["id"]: m for m in load_catalog()}
     mid = ns.model_id
     job_id = getattr(ns, "job_id", None)

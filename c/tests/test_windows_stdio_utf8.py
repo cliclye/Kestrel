@@ -36,15 +36,39 @@ class WindowsStdioUtf8Test(unittest.TestCase):
         self.assertEqual(encoded.decode("cp1252"), msg)
         with self.assertRaises(UnicodeEncodeError):
             f"pulling {mid} \u2192 {dest}".encode("cp1252")
+        # Position 24 is Qwen/Qwen3-0.6B with the old arrow banner.
+        mid2 = "Qwen/Qwen3-0.6B"
+        old = f"pulling {mid2} \u2192 dest"
+        self.assertEqual(old.index("\u2192"), 24)
+
+    def test_safe_wrapper_survives_failed_reconfigure(self):
+        """Even when reconfigure is a no-op, printing an arrow must not raise."""
+        wh = _load_windhover()
+        buf = io.BytesIO()
+        # Strict cp1252 wrapper that rejects reconfigure.
+        inner = io.TextIOWrapper(buf, encoding="cp1252", errors="strict")
+
+        def boom(**_kwargs):
+            raise OSError("nope")
+
+        inner.reconfigure = boom  # type: ignore[method-assign]
+        with mock.patch.object(sys, "stdout", inner), mock.patch.object(sys, "stderr", inner):
+            wh._configure_stdio_utf8()
+            # Must be wrapped
+            self.assertIsInstance(sys.stdout, wh._SafeTextIO)
+            sys.stdout.write("pulling Qwen/Qwen3-0.6B \u2192 dest\n")
+            sys.stdout.flush()
+            print("also via print \u2192 ok")
 
     def test_catalog_loads_as_utf8_with_arrow(self):
-        """catalog.json contains U+2192; locale cp1252 read_text() must not be used."""
+        """catalog.json must load on Windows even if descriptions once contained U+2192."""
         wh = _load_windhover()
         path = ROOT / "app" / "public" / "catalog.json"
         self.assertTrue(path.is_file())
-        with self.assertRaises(UnicodeDecodeError):
-            path.read_bytes().decode("cp1252")
-        models = json.loads(path.read_text(encoding="utf-8")).get("models", [])
+        text = path.read_text(encoding="utf-8")
+        # Prefer ASCII arrows in shipped catalog so locale reads cannot fail.
+        self.assertNotIn("\u2192", text)
+        models = json.loads(text).get("models", [])
         self.assertTrue(models)
         with mock.patch.object(wh, "CATALOG_PATH", path):
             loaded = wh.load_catalog()
@@ -72,7 +96,10 @@ class WindowsStdioUtf8Test(unittest.TestCase):
             rc = wh.cmd_pull(argparse.Namespace(model_id="no/such-model", weights=True))
         self.assertEqual(rc, 1)
         err.flush()
-        text = buf.getvalue().decode("cp1252", errors="replace")
+        # After wrap, underlying buffer may be utf-8 or replaced cp1252.
+        text = buf.getvalue().decode("utf-8", errors="replace")
+        if "unknown model id" not in text:
+            text = buf.getvalue().decode("cp1252", errors="replace")
         self.assertIn("unknown model id", text)
 
 

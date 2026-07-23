@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.3] — 2026-07-23
+
+### Fixes
+- **Windows Library download (harder fix):** wrap stdout/stderr so Unicode progress can never raise `UnicodeEncodeError: 'charmap' codec can't encode character '\u2192'` even when console reconfigure fails (PyInstaller + redirected handles). Add a PyInstaller UTF-8 runtime hook, disable HF/tqdm bars on Windows, and ASCII-sanitize catalog arrows.
+
 ## [0.3.2] — 2026-07-23
 
 ### Fixes

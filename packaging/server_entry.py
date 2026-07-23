@@ -23,8 +23,9 @@ def main() -> int:
     # Windows: UTF-8 stdio before importing windhover (download progress uses Unicode).
     os.environ.setdefault("PYTHONUTF8", "1")
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    os.environ.setdefault("TQDM_DISABLE", "1")
     if sys.platform == "win32":
-        os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
         for stream in (sys.stdout, sys.stderr):
             if stream is None:
                 continue
@@ -32,6 +33,35 @@ def main() -> int:
                 stream.reconfigure(encoding="utf-8", errors="replace")
             except (AttributeError, OSError, ValueError):
                 pass
+        # Wrap so a failed reconfigure still cannot raise UnicodeEncodeError.
+        try:
+            # Prefer windhover's safe wrapper once imported; until then, soft-replace.
+            for name in ("stdout", "stderr"):
+                stream = getattr(sys, name, None)
+                if stream is None:
+                    continue
+
+                class _Soft:
+                    def __init__(self, inner):
+                        self._inner = inner
+
+                    def write(self, s):
+                        try:
+                            return self._inner.write(s)
+                        except UnicodeEncodeError:
+                            enc = getattr(self._inner, "encoding", None) or "ascii"
+                            safe = s.encode(enc, errors="replace").decode(enc, errors="replace")
+                            return self._inner.write(safe)
+
+                    def flush(self):
+                        return self._inner.flush()
+
+                    def __getattr__(self, n):
+                        return getattr(self._inner, n)
+
+                setattr(sys, name, _Soft(stream))
+        except Exception:
+            pass
 
     os.environ.setdefault("WINDHOVER_ROOT", str(bundle))
 

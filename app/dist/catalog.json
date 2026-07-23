@@ -156,7 +156,7 @@
     {
       "id": "Qwen/Qwen3-8B",
       "name": "Qwen3 8B · engine Q4",
-      "description": "Dense Qwen3 ~8B / 9B-class (~16GB HF → ~5GB Windhover int4 KPK). Official Qwen3.5-9B is hybrid qwen3_5 and not engine-supported yet — use this for local windhover-engine chat.",
+      "description": "Dense Qwen3 ~8B / 9B-class (~16GB HF -> ~5GB Windhover int4 KPK). Official Qwen3.5-9B is hybrid qwen3_5 and not engine-supported yet — use this for local windhover-engine chat.",
       "size_gb": 16.5,
       "license": "Apache-2.0",
       "source": "hf_small",
@@ -359,7 +359,7 @@
     {
       "id": "zai-org/GLM-5.2-FP8",
       "name": "GLM-5.2",
-      "description": "Z.ai GLM-5.2 MoE+DSA (~756GB FP8). Newest GLM; convert FP8→int4 before engine chat.",
+      "description": "Z.ai GLM-5.2 MoE+DSA (~756GB FP8). Newest GLM; convert FP8->int4 before engine chat.",
       "size_gb": 756,
       "license": "MIT",
       "hf_repo": "zai-org/GLM-5.2-FP8",

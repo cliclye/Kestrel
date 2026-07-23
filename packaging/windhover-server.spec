@@ -65,7 +65,7 @@ a = Analysis(
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(ROOT / "pyi_rth_windhover_utf8.py")],
     excludes=["torch", "transformers", "numpy", "tkinter"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
