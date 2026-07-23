@@ -90,9 +90,17 @@ button:disabled {
   height: 100%;
   min-height: 100%;
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  /* Top chrome (titlebar + optional banners) | main app */
+  grid-template-rows: auto 1fr;
   background: var(--bg);
   overflow: hidden;
+}
+
+.shell-chrome {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  grid-row: 1;
 }
 
 .titlebar.slim {
@@ -292,6 +300,8 @@ button:disabled {
   min-height: 0;
   height: 100%;
   overflow: hidden;
+  /* Always occupy the main shell row even if chrome siblings change */
+  grid-row: 2;
 }
 
 .shell.has-side .app-frame {

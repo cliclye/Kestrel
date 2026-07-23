@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { apiUrl } from "./api";
@@ -951,80 +952,89 @@ export function App() {
 
   return (
     <div className={`shell${tab === "agent" ? " has-side" : ""}`}>
-      {confirmUninstall ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <div className="modal">
-            <h2>Uninstall model?</h2>
-            <p>
-              Remove <strong>{confirmUninstall.name}</strong> from this Mac? This deletes local files
-              under <code>~/.windhover/models</code>.
-            </p>
-            <div className="modal-actions">
-              <button type="button" className="btn ghost" onClick={() => setConfirmUninstall(null)}>
-                Cancel
+      {confirmUninstall && typeof document !== "undefined"
+        ? createPortal(
+            <div className="modal-backdrop" role="dialog" aria-modal="true">
+              <div className="modal">
+                <h2>Uninstall model?</h2>
+                <p>
+                  Remove <strong>{confirmUninstall.name}</strong> from this Mac? This deletes local
+                  files under <code>~/.windhover/models</code>.
+                </p>
+                <div className="modal-actions">
+                  <button type="button" className="btn ghost" onClick={() => setConfirmUninstall(null)}>
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn primary danger-fill"
+                    onClick={() => void confirmUninstallNow()}
+                  >
+                    Uninstall
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+
+      <div className="shell-chrome">
+        <header className="titlebar slim">
+          <div className="traffic-spacer" aria-hidden />
+          <span className="titlebar-label">Windhover</span>
+          <div className="titlebar-end">
+            {updateInfo?.available ? (
+              <button
+                type="button"
+                className="btn update-btn"
+                disabled={updateBusy}
+                onClick={() => void applyUpdate()}
+                title={`Update to ${updateInfo.latest}`}
+              >
+                {updateBusy ? "Updating…" : `Update to ${updateInfo.latest}`}
               </button>
-              <button type="button" className="btn primary danger-fill" onClick={() => void confirmUninstallNow()}>
-                Uninstall
-              </button>
+            ) : null}
+            <div className={`engine-pill compact ${engineState}`} title={engineTitle}>
+              <i className="dot" aria-hidden />
+              <strong>
+                {engineOk === false
+                  ? "Off"
+                  : enginePresent === false
+                    ? "No binary"
+                    : engineOk
+                      ? "Engine"
+                      : "…"}
+              </strong>
             </div>
           </div>
-        </div>
-      ) : null}
+        </header>
 
-      <header className="titlebar slim">
-        <div className="traffic-spacer" aria-hidden />
-        <span className="titlebar-label">Windhover</span>
-        <div className="titlebar-end">
-          {updateInfo?.available ? (
+        {updateInfo?.available ? (
+          <div className="update-banner" role="status">
+            <strong>Update available</strong>
+            <span>
+              Windhover {updateInfo.latest} is ready
+              {updateInfo.current ? ` (you have ${updateInfo.current})` : ""}. Update in place — no
+              uninstall needed.
+            </span>
             <button
               type="button"
-              className="btn update-btn"
+              className="btn primary"
               disabled={updateBusy}
               onClick={() => void applyUpdate()}
-              title={`Update to ${updateInfo.latest}`}
             >
-              {updateBusy ? "Updating…" : `Update to ${updateInfo.latest}`}
+              {updateBusy ? "Downloading…" : "Update now"}
             </button>
-          ) : null}
-          <div className={`engine-pill compact ${engineState}`} title={engineTitle}>
-            <i className="dot" aria-hidden />
-            <strong>
-              {engineOk === false
-                ? "Off"
-                : enginePresent === false
-                  ? "No binary"
-                  : engineOk
-                    ? "Engine"
-                    : "…"}
-            </strong>
+            {updateInfo.html_url ? (
+              <a className="btn ghost" href={updateInfo.html_url} target="_blank" rel="noreferrer">
+                Release notes
+              </a>
+            ) : null}
+            {updateMsg ? <span className="update-msg">{updateMsg}</span> : null}
           </div>
-        </div>
-      </header>
-
-      {updateInfo?.available ? (
-        <div className="update-banner" role="status">
-          <strong>Update available</strong>
-          <span>
-            Windhover {updateInfo.latest} is ready
-            {updateInfo.current ? ` (you have ${updateInfo.current})` : ""}. Update in place — no
-            uninstall needed.
-          </span>
-          <button
-            type="button"
-            className="btn primary"
-            disabled={updateBusy}
-            onClick={() => void applyUpdate()}
-          >
-            {updateBusy ? "Downloading…" : "Update now"}
-          </button>
-          {updateInfo.html_url ? (
-            <a className="btn ghost" href={updateInfo.html_url} target="_blank" rel="noreferrer">
-              Release notes
-            </a>
-          ) : null}
-          {updateMsg ? <span className="update-msg">{updateMsg}</span> : null}
-        </div>
-      ) : null}
+        ) : null}
+      </div>
 
       <div className="app-frame">
         <nav className="rail" aria-label="Primary">

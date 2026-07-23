@@ -17,7 +17,7 @@ on:
       tag:
         description: "GitHub Release tag to upload into (e.g. v0.1.0)"
         required: true
-        default: "v0.3.7"
+        default: "v0.3.8"
 
 permissions:
   contents: write
@@ -245,7 +245,7 @@ jobs:
           make_latest: true
           generate_release_notes: true
           body: |
-            ## Windhover 0.3.7
+            ## Windhover 0.3.8
 
             Windows Chat after Library install uses windhover-engine (no torch). See [CHANGELOG.md](https://github.com/cliclye/Windhover/blob/main/CHANGELOG.md).
 
@@ -262,7 +262,7 @@ jobs:
             - **macOS:** unsigned — Gatekeeper may require Open Anyway ([docs/DOWNLOAD.md](https://github.com/cliclye/Windhover/blob/main/docs/DOWNLOAD.md)).
             - **Windows:** unsigned — SmartScreen may require More info → Run anyway.
 
-            ### What's new (0.3.7)
+            ### What's new (0.3.8)
             - Windows: Chat after Library install no longer needs `pip install torch`
             - Windows: engine-first routing + torch-free KPK convert for Phi/Gemma
             - Packaging selfcheck covers hub + numpy/safetensors + chat routing

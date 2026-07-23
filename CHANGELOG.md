@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.8] — 2026-07-23
+
+### Bugs fixed
+- **UI squashed into top quarter of the window:** shell grid reserved an empty `1fr` row when the update banner was hidden. Titlebar + banners are one chrome block again so the app fills the window.
+
 ## [0.3.7] — 2026-07-23
 
 ### Bugs fixed
