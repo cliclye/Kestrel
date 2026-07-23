@@ -23,8 +23,11 @@ python3 -m pip install -q \
   tqdm \
   packaging \
   click \
-  hf-xet
-python3 -c "import huggingface_hub, httpx; from huggingface_hub import snapshot_download; print('huggingface_hub', huggingface_hub.__version__, 'httpx', httpx.__version__)"
+  hf-xet \
+  numpy \
+  safetensors \
+  ml_dtypes
+python3 -c "import huggingface_hub, httpx, numpy, safetensors; from huggingface_hub import snapshot_download; print('hub', huggingface_hub.__version__, 'numpy', numpy.__version__)"
 python3 -m PyInstaller packaging/windhover-server.spec --noconfirm --distpath packaging/dist --workpath packaging/build
 
 BIN_DIR="$ROOT/desktop/src-tauri/binaries"

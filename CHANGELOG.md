@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.5] — 2026-07-23
+
+### Bugs fixed
+- **Windows Chat `No module named 'torch'` after Library download:** chat no longer routes downloaded models through transformers preview when KPK is missing. Packaged apps use windhover-engine (dense load-time quant for Qwen/Llama/Mistral; torch-free numpy KPK convert for Phi/Gemma).
+- **Packaging:** sidecar bundles `numpy` / `safetensors` / `kestrel_pack` for convert; selfcheck covers chat routing helpers; torch/transformers stay excluded on purpose.
+
 ## [0.3.4] — 2026-07-23
 
 ### Bugs fixed

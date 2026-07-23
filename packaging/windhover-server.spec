@@ -29,12 +29,15 @@ datas = [
     (str(REPO / "app" / "public" / "catalog.json"), "app/public"),
     (str(REPO / "app" / "public" / "windhover-icon.png"), "app/public"),
     (str(REPO / "tools" / "agent_workspace.py"), "tools"),
+    # In-process KPK convert (numpy, no torch) for Phi/Gemma after Library install.
+    (str(REPO / "tools" / "kestrel_pack.py"), "tools"),
 ]
 
 binaries = []
 hiddenimports = [
     "bundled_windhover",
     "agent_workspace",
+    "kestrel_pack",
     "http.server",
     "http.client",
     "urllib.parse",
@@ -57,6 +60,7 @@ hiddenimports = [
 ]
 
 # Library downloads need huggingface_hub (+ httpx stack) inside the frozen sidecar.
+# KPK convert needs numpy + safetensors (torch stays excluded — too large).
 # Lazy imports in windhover are invisible to Analysis — collect packages explicitly.
 for _pkg in (
     "huggingface_hub",
@@ -72,11 +76,14 @@ for _pkg in (
     "tqdm",
     "packaging",
     "click",
+    "numpy",
+    "safetensors",
+    "ml_dtypes",
 ):
     try:
         _d, _b, _h = collect_all(_pkg)
     except Exception as e:
-        # yaml may be imported as PyYAML; hf-xet is optional/platform-specific.
+        # yaml may be imported as PyYAML; hf-xet / ml_dtypes optional.
         print(f"[windhover-server.spec] skip collect_all({_pkg!r}): {e}")
         continue
     datas += _d
@@ -100,16 +107,16 @@ if ico.is_file() and sys.platform == "win32":
 
 a = Analysis(
     [str(ROOT / "server_entry.py")],
-    pathex=[str(REPO), str(ROOT)],
+    pathex=[str(REPO), str(ROOT), str(REPO / "tools")],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[str(ROOT / "pyi_rth_windhover_utf8.py")],
-    # transformers/torch stay out of the sidecar (huge). Engine chat still works;
-    # chat-template formatting falls back without transformers.
-    excludes=["torch", "transformers", "numpy", "tkinter"],
+    # torch/transformers stay out (gigabytes). Chat uses windhover-engine;
+    # KPK convert uses numpy + safetensors only.
+    excludes=["torch", "transformers", "tkinter"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

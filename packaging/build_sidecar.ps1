@@ -15,7 +15,7 @@ if (-not (Test-Path "app/dist/index.html")) {
   Pop-Location
 }
 
-# Runtime deps for Library downloads (huggingface_hub 1.x uses httpx, not requests-only).
+# Runtime deps for Library downloads + torch-free KPK convert.
 $HubDeps = @(
   "pyinstaller",
   "huggingface_hub>=0.23",
@@ -26,10 +26,13 @@ $HubDeps = @(
   "tqdm",
   "packaging",
   "click",
-  "hf-xet"
+  "hf-xet",
+  "numpy",
+  "safetensors",
+  "ml_dtypes"
 )
 python -m pip install -q @HubDeps
-python -c "import huggingface_hub, httpx; from huggingface_hub import snapshot_download; print('huggingface_hub', huggingface_hub.__version__, 'httpx', httpx.__version__)"
+python -c "import huggingface_hub, httpx, numpy, safetensors; from huggingface_hub import snapshot_download; print('hub', huggingface_hub.__version__, 'numpy', numpy.__version__)"
 python -m PyInstaller packaging/windhover-server.spec --noconfirm --distpath packaging/dist --workpath packaging/build
 
 $BinDir = Join-Path $Root "desktop/src-tauri/binaries"

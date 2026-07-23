@@ -63,13 +63,83 @@ def main() -> int:
         except Exception:
             pass
 
-    # CI / packaging: verify Library-download deps inside the frozen binary.
+    # CI / packaging: verify Library-download + engine-chat deps inside the freeze.
     if "--sidecar-selfcheck" in sys.argv:
         try:
+            import json
+            import tempfile
+
+            sys.path.insert(0, str(bundle))
+            sys.path.insert(0, str(bundle / "tools"))
+
             import huggingface_hub
             from huggingface_hub import snapshot_download  # noqa: F401
+            import numpy  # noqa: F401
+            import safetensors  # noqa: F401
+            import kestrel_pack  # noqa: F401
 
-            print(f"sidecar-selfcheck ok huggingface_hub={huggingface_hub.__version__}")
+            # Chat must prefer windhover-engine without torch/transformers.
+            try:
+                import torch  # noqa: F401
+
+                torch_ok = True
+            except ImportError:
+                torch_ok = False
+
+            try:
+                import bundled_windhover as wh  # type: ignore
+            except ImportError:
+                wh = None
+
+            # Prefer the live `windhover` source — packaging/bundled_windhover.py can be
+            # a stale copy left from an earlier PyInstaller run during local checks.
+            wh_src = bundle / "windhover"
+            if wh_src.is_file():
+                import importlib.machinery
+                import importlib.util
+
+                loader = importlib.machinery.SourceFileLoader("wh_selfcheck", str(wh_src))
+                spec = importlib.util.spec_from_loader(loader.name, loader)
+                if spec is not None and spec.loader is not None:
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                    wh = mod
+
+            if wh is not None:
+                tmp = Path(tempfile.mkdtemp(prefix="wh-selfcheck-"))
+                (tmp / "config.json").write_text(
+                    json.dumps(
+                        {
+                            "model_type": "qwen2",
+                            "architectures": ["Qwen2ForCausalLM"],
+                            "hidden_size": 64,
+                            "num_hidden_layers": 1,
+                            "num_attention_heads": 4,
+                            "num_key_value_heads": 4,
+                            "intermediate_size": 128,
+                            "vocab_size": 128,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                if not wh._dense_loadtime_ok(tmp):
+                    raise RuntimeError("_dense_loadtime_ok failed for qwen2 fixture")
+                # Without 30MB weights, mode is blocked — that's fine. Routing helper must exist.
+                if not callable(wh._chat_mode) or not callable(wh._ensure_engine_pack):
+                    raise RuntimeError("chat routing helpers missing")
+
+            print(
+                "sidecar-selfcheck ok "
+                f"huggingface_hub={huggingface_hub.__version__} "
+                f"numpy={numpy.__version__} "
+                f"torch_bundled={torch_ok}"
+            )
+            if torch_ok:
+                print(
+                    "sidecar-selfcheck WARN: torch unexpectedly present in freeze "
+                    "(sidecar should stay torch-free)",
+                    file=sys.stderr,
+                )
             return 0
         except Exception as e:
             print(f"sidecar-selfcheck FAILED: {type(e).__name__}: {e}", file=sys.stderr)

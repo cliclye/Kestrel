@@ -171,6 +171,61 @@ def _ensure_ml_imports() -> None:
         break
 
 
+def _transformers_available() -> bool:
+    """True when transformers+torch can run preview chat (dev installs only)."""
+    try:
+        import torch  # noqa: F401
+        import transformers  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+def _dense_loadtime_ok(snap: Path) -> bool:
+    """True when windhover-engine dense.c can load raw HF weights (no KPK).
+
+    Matches engine/runtime/dense.c dense_is_arch: qwen2/3, llama, mistral.
+    Gemma/Phi need a KPK pack (windhover.c) — see _windhover_supported.
+    """
+    cfg_path = snap / "config.json"
+    if not cfg_path.is_file():
+        return False
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if cfg.get("n_routed_experts") or cfg.get("num_experts") or cfg.get("num_local_experts"):
+        return False
+    arches = " ".join(str(a) for a in (cfg.get("architectures") or []))
+    if any(
+        x in arches
+        for x in (
+            "MixtralForCausalLM",
+            "Qwen2MoeForCausalLM",
+            "Qwen3MoeForCausalLM",
+            "Gemma2ForCausalLM",
+            "Gemma3ForCausalLM",
+            "Phi3ForCausalLM",
+        )
+    ):
+        return False
+    mt = str(cfg.get("model_type") or "").lower()
+    if mt in ("gemma2", "gemma3", "gemma", "phi3", "phi"):
+        return False
+    if mt in ("qwen2", "qwen3", "llama", "mistral"):
+        return True
+    return any(
+        x in arches
+        for x in (
+            "Qwen2ForCausalLM",
+            "Qwen3ForCausalLM",
+            "LlamaForCausalLM",
+            "MistralForCausalLM",
+        )
+    )
+
+
 def _engine_bin() -> Path:
     """Resolve windhover-engine, preferring .exe on Windows.
 
@@ -633,15 +688,38 @@ def _windhover_supported(snap: Path) -> bool:
 
 
 def _kpk_convert(snap: Path, job_id: str | None = None) -> bool:
-    """Run the one-time Windhover convert (quant + calibrate + AWQ). ~1-2 min/GB."""
+    """Run the one-time Windhover convert (quant + calibrate + AWQ). ~1-2 min/GB.
+
+    Packaged apps (frozen / no torch) convert in-process with --no-calib/--no-awq
+    using numpy + safetensors only.
+    """
     tool = ROOT / "tools" / "kestrel_pack.py"
-    if not tool.is_file() or os.environ.get("WINDHOVER_NO_KPK") or os.environ.get("KESTREL_NO_KPK"):
+    if os.environ.get("WINDHOVER_NO_KPK") or os.environ.get("KESTREL_NO_KPK"):
         return False
     if _has_kpk(snap):
         return True
     if job_id:
-        _job_set(job_id, status="running", pct=98, message="Windhover convert (int4-g64 + calibrate)...")
-    print("running Windhover convert (one-time quantize + calibrate)...")
+        _job_set(job_id, status="running", pct=98, message="Windhover convert (int4-g64)...")
+    print("running Windhover convert (one-time quantize)...")
+
+    frozen = bool(getattr(sys, "frozen", False))
+    use_inprocess = frozen or not tool.is_file() or not _transformers_available()
+
+    if use_inprocess:
+        try:
+            tools_dir = str(ROOT / "tools")
+            if tools_dir not in sys.path:
+                sys.path.insert(0, tools_dir)
+            import kestrel_pack as kp  # type: ignore
+
+            outdir = str(snap / "kpk")
+            # No torch in the sidecar: skip calibration / AWQ (still a valid KPK).
+            kp.convert(str(snap), outdir, awq=False, calib=False)
+            return _has_kpk(snap)
+        except Exception as e:
+            sys.stderr.write(f"[windhover] in-process KPK convert failed: {type(e).__name__}: {e}\n")
+            return False
+
     py = _ml_python()
     rc = subprocess.call([py, str(tool), "--snap", str(snap)])
     if rc != 0:
@@ -650,6 +728,19 @@ def _kpk_convert(snap: Path, job_id: str | None = None) -> bool:
             [py, str(tool), "--snap", str(snap), "--no-calib", "--no-awq"]
         )
     return rc == 0 and _has_kpk(snap)
+
+
+def _ensure_engine_pack(snap: Path) -> bool:
+    """Make SNAP runnable by windhover-engine without transformers.
+
+    Qwen/Llama/Mistral: dense load-time quant on raw HF weights.
+    Phi/Gemma/etc.: build a KPK pack (numpy convert) when supported.
+    """
+    if _has_kpk(snap) or _dense_loadtime_ok(snap):
+        return True
+    if _windhover_supported(snap) and _has_real_weights(snap):
+        return _kpk_convert(snap)
+    return False
 
 
 def _chat_mode(snap: Path) -> str:
@@ -667,21 +758,32 @@ def _chat_mode(snap: Path) -> str:
         return "engine-oracle"
 
     has_w = _has_real_weights(snap)
-    has_k = _has_kpk(snap) or any((snap / "kpk").glob("kpk-*.safetensors")) if (snap / "kpk").is_dir() else _has_kpk(snap)
+    has_k = _has_kpk(snap) or (
+        any((snap / "kpk").glob("kpk-*.safetensors")) if (snap / "kpk").is_dir() else False
+    )
 
     # Incomplete HF checkout (tokenizer only, download interrupted) — not chat-capable.
     if not has_w and not has_k:
         return "blocked"
 
-    # Prefer windhover-engine when a real KPK pack exists — unless the arch
-    # needs features the engine lacks (Phi-4 partial RoPE / longrope).
+    # Prefer windhover-engine whenever the pack is (or can be) engine-runnable.
+    # Never force transformers preview on packaged apps (no torch in the sidecar).
     if has_k:
         if _engine_faithful(snap) or not has_w:
             return "engine"
-        return "preview"
+        if _transformers_available():
+            return "preview"
+        return "engine"
 
-    # HF safetensors present but not converted yet → transformers chat.
-    if has_w:
+    if has_w and _engine_faithful(snap):
+        if (
+            chat in ("engine", "engine-oracle")
+            or _dense_loadtime_ok(snap)
+            or _windhover_supported(snap)
+        ):
+            return "engine"
+
+    if has_w and _transformers_available():
         return "preview"
 
     if _is_tiny_stub(snap) and not mid.startswith(("windhover/", "kestrel/")):
@@ -853,6 +955,21 @@ def _preview_chat(
     except Exception as e:
         err = f"{type(e).__name__}: {e}"
         sys.stderr.write(f"[windhover] preview chat failed: {err}\n")
+        if not _transformers_available():
+            return (
+                "This model needs windhover-engine (not transformers). "
+                "The engine path was unavailable and torch/transformers are not "
+                "bundled in the desktop app. Try re-installing the model from Library, "
+                "or restart the app so Windhover can convert weights for the engine.\n"
+                f"Details: {err}",
+                {
+                    "backend": "preview",
+                    "error": err,
+                    "selected_model": selected,
+                    "preview_model": repo,
+                    "engine_active": False,
+                },
+            )
         return (
             "Small-model chat failed to load. Run: pip install transformers torch\n"
             f"Details: {err}",
@@ -1053,6 +1170,15 @@ def _agent_run(
             return {"ok": False, "error": f"model not chat-capable (mode={mode})"}
         if mode == "preview" and not _has_real_weights(snap):
             return {"ok": False, "error": "model has no real Hugging Face weights"}
+        if mode == "engine" and not _ensure_engine_pack(snap):
+            if _transformers_available() and _has_real_weights(snap):
+                mode = "preview"
+            else:
+                return {
+                    "ok": False,
+                    "error": "engine could not prepare this model (KPK convert failed)",
+                    "code": "engine_inactive",
+                }
 
     steps: list[dict] = []
     tool_results: list[dict] = []
@@ -2637,6 +2763,45 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
                     text, stats = _preview_chat(messages, max_tokens, temperature, snap=snap)
                     backend = "preview"
                 else:
+                    # Phi/Gemma need a KPK; Qwen/Llama/Mistral can run raw HF via dense.c.
+                    if not _ensure_engine_pack(snap):
+                        if _transformers_available() and _has_real_weights(snap):
+                            text, stats = _preview_chat(
+                                messages, max_tokens, temperature, snap=snap
+                            )
+                            backend = "preview"
+                            return self._json(
+                                200,
+                                {
+                                    "id": "kestrel-chat",
+                                    "object": "chat.completion",
+                                    "model": body.get("model")
+                                    or _snap_meta(snap).get("id")
+                                    or snap.name,
+                                    "backend": backend,
+                                    "engine_active": False,
+                                    "stats": stats,
+                                    "usage": {
+                                        "completion_tokens": stats.get("completion_tokens") or 0,
+                                        "total_tokens": stats.get("completion_tokens") or 0,
+                                    },
+                                    "choices": [
+                                        {
+                                            "index": 0,
+                                            "message": {"role": "assistant", "content": text},
+                                            "finish_reason": "stop",
+                                        }
+                                    ],
+                                },
+                            )
+                        return self._json(
+                            503,
+                            _engine_inactive_payload(
+                                "Windhover engine could not prepare this model for chat "
+                                "(KPK convert failed and torch/transformers are not available). "
+                                "Re-install from Library or check the server log."
+                            ),
+                        )
                     prompt = ""
                     for m in messages:
                         if m.get("role") == "user":
@@ -2722,14 +2887,14 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
                             _engine_inactive_payload(str(e), detail=e.detail),
                         )
                     # If KPK/engine path produced no usable answer but HF weights exist,
-                    # fall back to transformers so Chat still works — but mark engine inactive.
+                    # fall back to transformers only when available (not in packaged apps).
                     bad_eng = (
                         not (text or "").strip()
                         or str(text).startswith("The model returned an empty")
                         or str(text).startswith("windhover-engine ran this pack")
                         or _looks_like_engine_garbage(str(text))
                     )
-                    if bad_eng and _has_real_weights(snap):
+                    if bad_eng and _has_real_weights(snap) and _transformers_available():
                         sys.stderr.write(
                             "[windhover] engine reply unusable — falling back to transformers "
                             "(engine inactive for this turn)\n"
@@ -2754,8 +2919,7 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
                             503,
                             _engine_inactive_payload(
                                 "Windhover engine is not active — the model produced no usable "
-                                "reply and there are no Hugging Face weights to fall back on. "
-                                "Re-install from Library or re-convert the pack."
+                                "reply. Re-install from Library or re-convert the pack."
                             ),
                         )
                 return self._json(

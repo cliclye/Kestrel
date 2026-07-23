@@ -17,7 +17,7 @@ on:
       tag:
         description: "GitHub Release tag to upload into (e.g. v0.1.0)"
         required: true
-        default: "v0.3.4"
+        default: "v0.3.5"
 
 permissions:
   contents: write
@@ -109,7 +109,7 @@ jobs:
         env:
           WINDHOVER_SERVER_CONSOLE: "1"
         run: |
-          python -m pip install -q pyinstaller "huggingface_hub>=0.23" "httpx>=0.23" filelock fsspec PyYAML tqdm packaging click hf-xet
+          python -m pip install -q pyinstaller "huggingface_hub>=0.23" "httpx>=0.23" filelock fsspec PyYAML tqdm packaging click hf-xet numpy safetensors ml_dtypes
           powershell -File packaging/build_sidecar.ps1 -Triple ${{ matrix.triple }}
           Test-Path "desktop/src-tauri/binaries/windhover-server-${{ matrix.triple }}.exe"
           Test-Path "desktop/src-tauri/binaries/windhover-engine-${{ matrix.triple }}.exe"
@@ -245,9 +245,9 @@ jobs:
           make_latest: true
           generate_release_notes: true
           body: |
-            ## Windhover 0.3.4
+            ## Windhover 0.3.5
 
-            Windows Library downloads bundle huggingface_hub; NSIS/startup fixes from 0.3.3. See [CHANGELOG.md](https://github.com/cliclye/Windhover/blob/main/CHANGELOG.md).
+            Windows Chat after Library install uses windhover-engine (no torch). See [CHANGELOG.md](https://github.com/cliclye/Windhover/blob/main/CHANGELOG.md).
 
             ## Download
 
@@ -262,9 +262,9 @@ jobs:
             - **macOS:** unsigned — Gatekeeper may require Open Anyway ([docs/DOWNLOAD.md](https://github.com/cliclye/Windhover/blob/main/docs/DOWNLOAD.md)).
             - **Windows:** unsigned — SmartScreen may require More info → Run anyway.
 
-            ### What's new (0.3.4)
-            - Windows: fix Library download UnicodeEncodeError (charmap / U+2192)
-            - Windows: NSIS kills locked windhover-server.exe before install/upgrade
-            - Windows: app UI no longer freezes ~1 minute waiting on sidecar startup
+            ### What's new (0.3.5)
+            - Windows: Chat after Library install no longer needs `pip install torch`
+            - Windows: engine-first routing + torch-free KPK convert for Phi/Gemma
+            - Packaging selfcheck covers hub + numpy/safetensors + chat routing
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

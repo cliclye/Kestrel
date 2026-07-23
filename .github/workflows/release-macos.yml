@@ -118,9 +118,9 @@ jobs:
           make_latest: true
           generate_release_notes: true
           body: |
-            ## Windhover 0.3.4
+            ## Windhover 0.3.5
 
-            Windows Library downloads bundle huggingface_hub; NSIS/startup fixes from 0.3.3. See [CHANGELOG.md](https://github.com/cliclye/Windhover/blob/main/CHANGELOG.md).
+            Windows Chat no longer requires torch after Library download — engine path + torch-free KPK convert. See [CHANGELOG.md](https://github.com/cliclye/Windhover/blob/main/CHANGELOG.md).
 
             ## Download
 
@@ -135,8 +135,9 @@ jobs:
             - **macOS:** if Gatekeeper says the app is **“damaged”**, run `xattr -cr /Applications/Windhover.app` (not a corrupt download — see [docs/DOWNLOAD.md](https://github.com/cliclye/Windhover/blob/main/docs/DOWNLOAD.md))
             - **Windows:** unsigned — SmartScreen may require More info → Run anyway
 
-            ### What's new (0.3.4)
-            - Windows: bundle huggingface_hub in windhover-server so Library downloads work
-            - Windows: fix Library download UnicodeEncodeError / NSIS lock / startup freeze (from 0.3.3)
+            ### What's new (0.3.5)
+            - Windows: Chat after Library install uses windhover-engine (no `pip install torch`)
+            - Windows: torch-free KPK convert (numpy/safetensors) for Phi/Gemma packs
+            - Packaging selfcheck covers download + convert + chat routing
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

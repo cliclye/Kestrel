@@ -263,12 +263,61 @@ def load_shards(snap):
     return files, tensors
 
 
+def _bf16_u16_to_f32(u16):
+    """Convert little-endian bfloat16 bit patterns to float32 without torch."""
+    bits = np.asarray(u16, dtype=np.uint16).astype(np.uint32) << 16
+    return bits.view(np.float32)
+
+
 def read_tensor(snap, fname, key):
-    # torch framework handles bf16 natively (numpy has no bfloat16 dtype)
+    """Load one tensor as float32.
+
+    Prefers numpy / ml_dtypes so packaged Windows sidecars can convert without
+    torch. Falls back to torch only when BF16 cannot be decoded otherwise.
+    """
     from safetensors import safe_open
-    with safe_open(os.path.join(snap, fname), framework="pt") as sf:
-        t = sf.get_tensor(key)
-    return t.float().numpy()
+
+    path = os.path.join(snap, fname)
+    # 1) numpy path (F32/F16; BF16 when ml_dtypes is installed)
+    try:
+        with safe_open(path, framework="np") as sf:
+            t = sf.get_tensor(key)
+        if t.dtype == np.float32:
+            return np.ascontiguousarray(t)
+        if t.dtype == np.float16:
+            return np.ascontiguousarray(t.astype(np.float32))
+        # ml_dtypes.bfloat16 or similar
+        return np.ascontiguousarray(t.astype(np.float32))
+    except Exception:
+        pass
+
+    # 2) torch (dev machines / calibration)
+    try:
+        import torch
+
+        with safe_open(path, framework="pt") as sf:
+            t = sf.get_tensor(key)
+        return t.float().numpy()
+    except Exception:
+        pass
+
+    # 3) Manual BF16/F16/F32 via header offsets (no torch / no ml_dtypes)
+    with open(path, "rb") as f:
+        n = int.from_bytes(f.read(8), "little")
+        header = json.loads(f.read(n).decode("utf-8"))
+        info = header[key]
+        dtype = info["dtype"]
+        begin, end = info["data_offsets"]
+        f.seek(8 + n + begin)
+        raw = f.read(end - begin)
+    if dtype == "BF16":
+        u16 = np.frombuffer(raw, dtype="<u2")
+        return np.ascontiguousarray(_bf16_u16_to_f32(u16))
+    if dtype == "F16":
+        return np.ascontiguousarray(np.frombuffer(raw, dtype="<f2").astype(np.float32))
+    if dtype == "F32":
+        return np.ascontiguousarray(np.frombuffer(raw, dtype="<f4"))
+    raise RuntimeError(f"kpk: unsupported dtype {dtype} for {key} (install torch or ml_dtypes)")
 
 
 def convert(snap, outdir, awq=True, calib=True, attn_bits=8, lm_bits=8):
