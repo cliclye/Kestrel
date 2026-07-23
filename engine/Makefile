@@ -133,7 +133,7 @@ runtime/engine.o: runtime/engine.c memory/budget.h runtime/dense.h runtime/windh
 runtime/dense.o: runtime/dense.c runtime/dense.h io/tok.h io/st.h
 	$(CC) $(CFLAGS) -c runtime/dense.c -o runtime/dense.o
 
-runtime/windhover.o: runtime/windhover.c runtime/windhover.h runtime/model_desc.h runtime/au.h io/tok.h io/st.h memory/budget.h
+runtime/windhover.o: runtime/windhover.c runtime/windhover.h runtime/model_desc.h runtime/wmir.h runtime/au.h io/tok.h io/st.h memory/budget.h
 	$(CC) $(CFLAGS) -c runtime/windhover.c -o runtime/windhover.o
 
 runtime/au.o: runtime/au.c runtime/au.h

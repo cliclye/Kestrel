@@ -1,13 +1,12 @@
 /* model_desc.h — Windhover architecture descriptor.
  *
- * Replaces string-sniffing (dense_is_arch) with a small table of layer
- * contracts. A pack is served by the Windhover runtime when either:
- *   - kestrel.json carries a "windhover" block (KPK pack, preferred), or
- *   - config.json model_type is in the supported table (raw HF pack:
- *     loader falls back to load-time quantization).
+ * Dense packs are preferred via KPK (kestrel.json "windhover" / WMIR).
+ * wh_desc_from_config still parses config.json for legacy packs and as a
+ * fallback when WMIR is absent. Nested VL configs unwrap text_config.
  *
- * Supported dense families: qwen2, qwen3, llama, mistral, gemma2, gemma3,
- * phi3. MoE configs are always routed to the engine.c MoE path.
+ * Classic families: qwen2, qwen3, llama, mistral, gemma2, gemma3, phi3.
+ * Extended (WMIR lowerers): gemma4, qwen3_5, llama4, kimi, deepseek_v4, …
+ * MoE configs without a dense KPK route to engine.c.
  */
 #ifndef WH_MODEL_DESC_H
 #define WH_MODEL_DESC_H
@@ -48,13 +47,19 @@ typedef struct {
     int rope_orig_max;     /* original_max_position_embeddings (longrope) */
 } WhDesc;
 
+/* Families that can run on the dense/KPK path (hint; WMIR is source of truth). */
 static const char *WH_DENSE_TYPES[] = {
-    "qwen2", "qwen3", "llama", "mistral", "gemma2", "gemma3", "phi3", NULL
+    "qwen2", "qwen3", "llama", "mistral", "gemma2", "gemma3", "phi3",
+    "gemma4", "gemma4_text", "qwen3_5", "qwen3_5_text", "qwen3.5",
+    NULL
 };
 
 static const char *WH_MOE_MARKERS[] = {
     "glm_moe_dsa", "n_routed_experts", "\"num_experts\"", "num_local_experts",
-    "MixtralForCausalLM", "Qwen2MoeForCausalLM", "Qwen3MoeForCausalLM", NULL
+    "MixtralForCausalLM", "Qwen2MoeForCausalLM", "Qwen3MoeForCausalLM",
+    "Llama4ForConditionalGeneration", "DeepseekV4ForCausalLM",
+    "KimiK25ForConditionalGeneration", "MiniMaxM3SparseForConditionalGeneration",
+    NULL
 };
 
 static char *wh_read_file_(const char *path, long *out_n) {
@@ -83,29 +88,68 @@ static float wh_jf_(jval *r, const char *k, float def) {
     return v ? (float)v->num : def;
 }
 
+/* Prefer nested text_config / language_config for VL wrappers. */
+static jval *wh_text_root_(jval *r) {
+    jval *tc = json_get(r, "text_config");
+    if (tc && tc->t == J_OBJ) return tc;
+    tc = json_get(r, "language_config");
+    if (tc && tc->t == J_OBJ) return tc;
+    return r;
+}
+
+static int wh_type_ok_(const char *mt) {
+    for (int i = 0; WH_DENSE_TYPES[i]; i++)
+        if (!strcmp(mt, WH_DENSE_TYPES[i])) return 1;
+    return 0;
+}
+
 /* 0 = not a supported dense arch (or is MoE), 1 = ok. */
 static int wh_desc_from_config(const char *snap, WhDesc *d) {
     char path[2048];
     snprintf(path, sizeof(path), "%s/config.json", snap);
     long n = 0;
     char *buf = wh_read_file_(path, &n);
-    if (!buf) return 0;
-    for (int i = 0; WH_MOE_MARKERS[i]; i++)
-        if (strstr(buf, WH_MOE_MARKERS[i])) { free(buf); return 0; }
+    if (!buf) {
+        snprintf(path, sizeof(path), "%s/params.json", snap);
+        buf = wh_read_file_(path, &n);
+        if (!buf) return 0;
+    }
+    int has_kpk = 0;
+    {
+        char kp[2048];
+        snprintf(kp, sizeof(kp), "%s/kestrel.json", snap);
+        long kn = 0;
+        char *kb = wh_read_file_(kp, &kn);
+        if (kb) {
+            has_kpk = strstr(kb, "\"windhover\"") != NULL;
+            free(kb);
+        }
+    }
+    if (!has_kpk) {
+        for (int i = 0; WH_MOE_MARKERS[i]; i++)
+            if (strstr(buf, WH_MOE_MARKERS[i])) { free(buf); return 0; }
+    }
 
     char *arena = NULL;
-    jval *r = json_parse(buf, &arena);
-    if (!r) { free(buf); return 0; }
+    jval *root = json_parse(buf, &arena);
+    if (!root) { free(buf); return 0; }
+    jval *r = wh_text_root_(root);
     jval *mt = json_get(r, "model_type");
+    if (!mt || mt->t != J_STR) mt = json_get(root, "model_type");
     if (!mt || mt->t != J_STR) { free(buf); free(arena); return 0; }
 
-    int ok = 0;
-    for (int i = 0; WH_DENSE_TYPES[i]; i++)
-        if (!strcmp(mt->str, WH_DENSE_TYPES[i])) { ok = 1; break; }
+    char mtype[32];
+    snprintf(mtype, sizeof(mtype), "%s", mt->str);
+    if (!strcmp(mtype, "gemma4_text") || !strcmp(mtype, "gemma4_unified"))
+        snprintf(mtype, sizeof(mtype), "gemma4");
+    if (!strcmp(mtype, "qwen3_5_text") || !strcmp(mtype, "qwen3.5"))
+        snprintf(mtype, sizeof(mtype), "qwen3_5");
+
+    int ok = wh_type_ok_(mtype) || has_kpk;
     if (!ok) { free(buf); free(arena); return 0; }
 
     memset(d, 0, sizeof(*d));
-    snprintf(d->model_type, sizeof(d->model_type), "%s", mt->str);
+    snprintf(d->model_type, sizeof(d->model_type), "%s", mtype);
     d->hidden = wh_ji_(r, "hidden_size", 0);
     d->layers = wh_ji_(r, "num_hidden_layers", 0);
     d->heads = wh_ji_(r, "num_attention_heads", 0);
@@ -119,22 +163,21 @@ static int wh_desc_from_config(const char *snap, WhDesc *d) {
     d->eos_id = wh_ji_(r, "eos_token_id", -1);
     d->bos_id = wh_ji_(r, "bos_token_id", -1);
     jval *tie = json_get(r, "tie_word_embeddings");
+    if (!tie) tie = json_get(root, "tie_word_embeddings");
     d->tie_embeddings = (tie && tie->t == J_BOOL) ? tie->boolean : 0;
     d->max_position = wh_ji_(r, "max_position_embeddings", 0);
     d->act = WH_ACT_SILU;
     d->norm = WH_NORM_RMS;
-    d->query_scale = 0.f; /* 0 -> 1/sqrt(head_dim) */
+    d->query_scale = 0.f;
     d->partial_rotary = 1.f;
     d->rope_attn_scale = 1.f;
     d->rope_orig_max = 0;
 
-    /* partial_rotary_factor (Phi-3/4): only first fraction of head_dim is rotated */
     {
         float pr = wh_jf_(r, "partial_rotary_factor", 1.f);
         if (pr > 0.f && pr <= 1.f) d->partial_rotary = pr;
     }
 
-    /* longrope / rope_scaling: attention scale even for short prompts */
     {
         jval *rs = json_get(r, "rope_scaling");
         if (!rs) rs = json_get(r, "rope_parameters");
@@ -147,7 +190,6 @@ static int wh_desc_from_config(const char *snap, WhDesc *d) {
             jval *pr = json_get(rs, "partial_rotary_factor");
             if (pr && pr->num > 0 && pr->num <= 1.0)
                 d->partial_rotary = (float)pr->num;
-            /* Phi longrope attention_factor = sqrt(1 + log(factor)/log(orig_max)) */
             if (tp && tp->t == J_STR &&
                 (!strcmp(tp->str, "longrope") || !strcmp(tp->str, "su"))) {
                 if (orig <= 0) orig = 4096;
@@ -170,13 +212,13 @@ static int wh_desc_from_config(const char *snap, WhDesc *d) {
         int rd = (int)(d->head_dim * d->partial_rotary);
         if (rd < 2) rd = 2;
         if (rd > d->head_dim) rd = d->head_dim;
-        if (rd & 1) rd--; /* must be even for half-split Neox RoPE */
+        if (rd & 1) rd--;
         d->rope_dim = rd;
     }
 
     if (!strcmp(d->model_type, "qwen2")) {
         d->qkv_bias = 1;
-    } else if (!strcmp(d->model_type, "qwen3")) {
+    } else if (!strcmp(d->model_type, "qwen3") || !strcmp(d->model_type, "qwen3_5")) {
         d->qk_norm = 1;
     } else if (!strcmp(d->model_type, "mistral")) {
         d->sliding_window = wh_ji_(r, "sliding_window", 0);
@@ -191,14 +233,18 @@ static int wh_desc_from_config(const char *snap, WhDesc *d) {
         d->embed_scale = sqrtf((float)d->hidden);
         float qs = wh_jf_(r, "query_pre_attn_scalar", 0.f);
         if (qs > 0) d->query_scale = 1.f / sqrtf(qs);
-    } else if (!strcmp(d->model_type, "gemma3")) {
+    } else if (!strcmp(d->model_type, "gemma3") || !strcmp(d->model_type, "gemma4")) {
         d->act = WH_ACT_GELU_TANH;
         d->norm = WH_NORM_RMS_GEMMA;
         d->post_norms = 1;
         d->qk_norm = 1;
-        d->sliding_window = wh_ji_(r, "sliding_window", 1024);
-        d->sw_pattern = wh_ji_(r, "sliding_window_pattern", 6);
+        d->sliding_window = wh_ji_(r, "sliding_window",
+            !strcmp(d->model_type, "gemma4") ? 512 : 1024);
+        d->sw_pattern = wh_ji_(r, "sliding_window_pattern",
+            !strcmp(d->model_type, "gemma4") ? 0 : 6);
         d->embed_scale = sqrtf((float)d->hidden);
+        d->final_softcap = wh_jf_(r, "final_logit_softcapping",
+            !strcmp(d->model_type, "gemma4") ? 30.f : 0.f);
     } else if (!strcmp(d->model_type, "phi3")) {
         d->fused_qkv = 1;
         d->fused_gate_up = 1;

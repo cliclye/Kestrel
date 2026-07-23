@@ -211,7 +211,8 @@ def _dense_loadtime_ok(snap: Path) -> bool:
     ):
         return False
     mt = str(cfg.get("model_type") or "").lower()
-    if mt in ("gemma2", "gemma3", "gemma", "phi3", "phi"):
+    if mt in ("gemma2", "gemma3", "gemma4", "gemma", "phi3", "phi",
+              "qwen3_5", "qwen3.5", "qwen3_5_text", "qwen3_5_moe"):
         return False
     if mt in ("qwen2", "qwen3", "llama", "mistral"):
         return True
@@ -320,7 +321,7 @@ def _app_version() -> str:
                 return str(ver).lstrip("v")
         except Exception:
             continue
-    return os.environ.get("WINDHOVER_VERSION", "0.3.10").lstrip("v")
+    return os.environ.get("WINDHOVER_VERSION", "0.3.11").lstrip("v")
 
 
 def _parse_semver(v: str) -> tuple[int, int, int]:
@@ -759,15 +760,35 @@ def _is_impostor_pack(snap: Path) -> bool:
     return False
 
 
+def _load_snap_cfg(snap: Path) -> dict | None:
+    for name in ("config.json", "params.json"):
+        cfg_path = snap / name
+        if not cfg_path.is_file():
+            continue
+        try:
+            return json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+    return None
+
+
+def _wmir_can_lower(cfg: dict) -> bool:
+    try:
+        tools = ROOT / "tools"
+        if str(tools) not in sys.path:
+            sys.path.insert(0, str(tools))
+        from wmir import can_lower  # type: ignore
+
+        return bool(can_lower(cfg))
+    except Exception:
+        return False
+
+
 def _dense_engine_supported(snap: Path) -> bool:
     """True when windhover-engine dense/Windhover path can load this SNAP
-    (Qwen2/3, Llama, Mistral, Gemma2/3, Phi-3)."""
-    cfg_path = snap / "config.json"
-    if not cfg_path.is_file():
-        return False
-    try:
-        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    except Exception:
+    immediately (Qwen2/3, Llama, Mistral) without KPK convert."""
+    cfg = _load_snap_cfg(snap)
+    if not cfg:
         return False
     # MoE packs use engine.c (same int4+IDOT family), not dense/windhover
     if cfg.get("n_routed_experts") or cfg.get("num_experts") or cfg.get("num_local_experts"):
@@ -783,7 +804,11 @@ def _dense_engine_supported(snap: Path) -> bool:
     ):
         return False
     mt = str(cfg.get("model_type") or "").lower()
-    if mt in ("qwen2", "qwen3", "llama", "mistral", "gemma2", "gemma3", "phi3"):
+    tc = cfg.get("text_config") if isinstance(cfg.get("text_config"), dict) else {}
+    mt_text = str(tc.get("model_type") or mt).lower()
+    if mt in ("qwen2", "qwen3", "llama", "mistral") or mt_text in (
+        "qwen2", "qwen3", "llama", "mistral",
+    ):
         return True
     return any(
         x in arches
@@ -792,9 +817,6 @@ def _dense_engine_supported(snap: Path) -> bool:
             "Qwen3ForCausalLM",
             "LlamaForCausalLM",
             "MistralForCausalLM",
-            "Gemma2ForCausalLM",
-            "Gemma3ForCausalLM",
-            "Phi3ForCausalLM",
         )
     )
 
@@ -878,25 +900,40 @@ def _has_kpk(snap: Path) -> bool:
         kj = d / "kestrel.json"
         if kj.is_file():
             try:
-                if "windhover" in json.loads(kj.read_text(encoding="utf-8")):
-                    return True
+                meta = json.loads(kj.read_text(encoding="utf-8"))
+                wh = meta.get("windhover") or {}
+                if not wh:
+                    continue
+                # MoE-stream WMIR-only packs are not dense KPK runtimes.
+                if wh.get("moe_stream") and not (wh.get("shards") or []):
+                    continue
+                return True
             except Exception:
                 pass
     return False
 
 
+def _has_wmir_pack(snap: Path) -> bool:
+    """True when convert wrote a windhover block (dense KPK or MoE-stream WMIR)."""
+    for d in (snap / "kpk", snap):
+        kj = d / "kestrel.json"
+        if not kj.is_file():
+            continue
+        try:
+            if "windhover" in json.loads(kj.read_text(encoding="utf-8")):
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def _windhover_supported(snap: Path) -> bool:
-    """True when tools/kestrel_pack.py can convert this pack for the
-    Windhover runtime (dense qwen2/qwen3/llama/mistral/gemma2/gemma3/phi3)."""
-    cfg_path = snap / "config.json"
-    if not cfg_path.is_file():
+    """True when tools/kestrel_pack.py can lower+convert this pack via WMIR."""
+    cfg = _load_snap_cfg(snap)
+    if not cfg:
         return False
-    try:
-        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    except Exception:
-        return False
-    if cfg.get("n_routed_experts") or cfg.get("num_experts") or cfg.get("num_local_experts"):
-        return False
+    if _wmir_can_lower(cfg):
+        return True
     mt = str(cfg.get("model_type") or "").lower()
     return mt in ("qwen2", "qwen3", "llama", "mistral", "gemma2", "gemma3", "phi3")
 
@@ -3518,20 +3555,9 @@ def cmd_convert(ns: argparse.Namespace) -> int:
         print(f"model not found: {ns.model}", file=sys.stderr)
         return 1
     if not _windhover_supported(snap):
-        cfg_mt = ""
-        try:
-            cfg_mt = str(json.loads((snap / "config.json").read_text(encoding="utf-8")).get("model_type") or "")
-        except Exception:
-            pass
-        hint = ""
-        if cfg_mt.lower() in ("qwen3_5", "qwen3.5") or "qwen3.5" in snap.name.lower():
-            hint = (
-                " Official Qwen3.5-9B is hybrid qwen3_5 (not dense). "
-                "Install Qwen/Qwen3-8B for windhover-engine int4/Q4 instead."
-            )
         print(
-            f"{snap.name}: unsupported for Windhover (dense qwen2/qwen3/llama/"
-            f"mistral/gemma2/gemma3/phi3 only).{hint}",
+            f"{snap.name}: no WMIR lowerer for this model_type "
+            f"(add tools/wmir/lower.py entry or check config.json/params.json).",
             file=sys.stderr,
         )
         return 1

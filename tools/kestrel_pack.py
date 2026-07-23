@@ -103,64 +103,105 @@ def dequant_g64(packed, sc, z):
     return w.reshape(O, I)
 
 
-# ---------------------------------------------------------------- descriptor
+# ---------------------------------------------------------------- descriptor / WMIR
 
+# Legacy allowlist kept for docs/tests; convert uses WMIR lowerers.
 ARCHES = {
-    # model_type -> descriptor defaults
-    "qwen2":   dict(act="silu", norm="rmsnorm", qkv_bias=True,  qk_norm=False,
-                    rope="neox", softcap=0.0, sliding_window=0, post_norms=False),
-    "qwen3":   dict(act="silu", norm="rmsnorm", qkv_bias=False, qk_norm=True,
-                    rope="neox", softcap=0.0, sliding_window=0, post_norms=False),
-    "llama":   dict(act="silu", norm="rmsnorm", qkv_bias=False, qk_norm=False,
-                    rope="neox", softcap=0.0, sliding_window=0, post_norms=False),
-    "mistral": dict(act="silu", norm="rmsnorm", qkv_bias=False, qk_norm=False,
-                    rope="neox", softcap=0.0, sliding_window=4096, post_norms=False),
-    "gemma2":  dict(act="gelu_tanh", norm="rmsnorm_gemma", qkv_bias=False, qk_norm=False,
-                    rope="neox", softcap=50.0, sliding_window=4096, post_norms=True,
-                    embed_scale="sqrt_hidden", attn_logit_softcap=50.0),
-    "gemma3":  dict(act="gelu_tanh", norm="rmsnorm_gemma", qkv_bias=False, qk_norm=True,
-                    rope="neox", softcap=0.0, sliding_window=1024, post_norms=True,
-                    embed_scale="sqrt_hidden"),
-    "phi3":    dict(act="silu", norm="rmsnorm", qkv_bias=False, qk_norm=False,
-                    rope="neox", softcap=0.0, sliding_window=0, post_norms=False,
-                    fused_qkv=True, fused_gate_up=True),
+    "qwen2", "qwen3", "llama", "mistral", "gemma2", "gemma3", "phi3",
 }
 
-MOE_MARKERS = ("n_routed_experts", "num_experts", "num_local_experts",
-               "glm_moe_dsa", "MixtralForCausalLM", "Qwen2MoeForCausalLM",
-               "Qwen3MoeForCausalLM")
+MOE_ENGINE_FAMILIES = {
+    "glm_moe_dsa", "kimi_k25", "kimi_k2", "deepseek_v4", "minimax_m3",
+    "minimax_m3_vl", "mistral_large3", "llama4", "llama4_text", "qwen3_5_moe",
+}
+
+
+def _wmir_import():
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    from wmir import lower_config, can_lower  # noqa: WPS433
+    return lower_config, can_lower
+
+
+def load_model_config(snap):
+    """Load config.json, or Mistral params.json when config.json is absent."""
+    cfg_path = os.path.join(snap, "config.json")
+    params_path = os.path.join(snap, "params.json")
+    if os.path.exists(cfg_path):
+        with open(cfg_path) as f:
+            return json.load(f)
+    if os.path.exists(params_path):
+        with open(params_path) as f:
+            cfg = json.load(f)
+        cfg.setdefault("model_type", "mistral_large3")
+        return cfg
+    raise RuntimeError(f"kpk: no config.json or params.json in {snap}")
 
 
 def build_descriptor(cfg):
-    mt = cfg.get("model_type", "")
-    raw = json.dumps(cfg)
-    if any(m in raw for m in MOE_MARKERS):
-        raise RuntimeError("kpk: MoE packs use the engine's MoE convert path, not kestrel_pack")
-    if mt not in ARCHES:
-        raise RuntimeError(f"kpk: unsupported model_type '{mt}' "
-                         f"(supported: {', '.join(sorted(ARCHES))})")
-    d = dict(ARCHES[mt])
-    d["model_type"] = mt
-    d["hidden"] = cfg["hidden_size"]
-    d["layers"] = cfg["num_hidden_layers"]
-    d["heads"] = cfg["num_attention_heads"]
-    d["kv_heads"] = cfg.get("num_key_value_heads", d["heads"])
-    d["head_dim"] = cfg.get("head_dim") or d["hidden"] // d["heads"]
-    d["inter"] = cfg["intermediate_size"]
-    d["vocab"] = cfg["vocab_size"]
-    d["rope_theta"] = cfg.get("rope_theta", 10000.0)
-    d["eps"] = cfg.get("rms_norm_eps", 1e-6)
-    d["tie_embeddings"] = bool(cfg.get("tie_word_embeddings", False))
-    d["eos"] = cfg.get("eos_token_id", -1)
-    d["bos"] = cfg.get("bos_token_id", -1)
-    if isinstance(d["eos"], list):
-        d["eos"] = d["eos"][0] if d["eos"] else -1
-    d["sliding_window"] = cfg.get("sliding_window") or d.get("sliding_window", 0) or 0
-    if mt == "gemma2":
-        d["softcap"] = cfg.get("final_logit_softcapping", 30.0) or 0.0
-        d["attn_logit_softcap"] = cfg.get("attn_logit_softcapping", 50.0) or 0.0
+    """Build legacy descriptor + WMIR from any lowerable HF config."""
+    lower_config, can_lower = _wmir_import()
+    if not can_lower(cfg):
+        mt = cfg.get("model_type", "?")
+        raise RuntimeError(
+            f"kpk: no WMIR lowerer for model_type '{mt}'. "
+            "Add a lowerer in tools/wmir/lower.py."
+        )
+    wmir = lower_config(cfg)
+    family = wmir.get("family") or cfg.get("model_type")
+    if family in MOE_ENGINE_FAMILIES and family != "qwen3_5_moe":
+        # Dense KPK path cannot pack streamed MLA MoE experts; callers should
+        # use the MoE engine SNAP. Still allow WMIR emission via build_wmir_only.
+        pass
+    model = wmir["model"]
+    d = dict(model)
+    d["model_type"] = family
+    d["wmir"] = wmir
+    d["weight_prefix"] = wmir.get("weight_prefix") or ""
+    # Compat keys expected by convert()
+    d.setdefault("softcap", model.get("final_softcap") or 0.0)
+    d.setdefault("attn_logit_softcap", model.get("attn_softcap") or 0.0)
+    d.setdefault("rope", "neox")
+    d.setdefault("fused_qkv", bool(model.get("fused_qkv")))
+    d.setdefault("fused_gate_up", bool(model.get("fused_gate_up")))
     return d
 
+
+def build_wmir_only(snap, outdir=None):
+    """Emit WMIR metadata without quantizing (MoE / audit path)."""
+    cfg = load_model_config(snap)
+    desc = build_descriptor(cfg)
+    outdir = outdir or os.path.join(snap, "kpk")
+    os.makedirs(outdir, exist_ok=True)
+    for f in ("config.json", "params.json", "tokenizer.json",
+              "tokenizer_config.json", "generation_config.json"):
+        src = os.path.join(snap, f)
+        if os.path.exists(src):
+            import shutil
+            shutil.copy2(src, os.path.join(outdir, f))
+    meta_path = os.path.join(snap, "kestrel.json")
+    meta = {}
+    if os.path.exists(meta_path):
+        with open(meta_path) as f:
+            meta = json.load(f)
+    meta["windhover"] = {
+        "version": 2,
+        "group_size": GS,
+        "formats": {},
+        "awq": False,
+        "down_transposed": True,
+        "neurons_permuted_hot_first": False,
+        "descriptor": {k: v for k, v in desc.items() if k != "wmir"},
+        "wmir": desc["wmir"],
+        "cats_tau": [],
+        "shards": [],
+        "moe_stream": True,
+    }
+    with open(os.path.join(outdir, "kestrel.json"), "w") as f:
+        json.dump(meta, f, indent=2)
+    log(f"wrote WMIR-only pack -> {outdir}")
+    return outdir
 
 # ---------------------------------------------------------------- calibration
 
@@ -345,26 +386,60 @@ def read_tensor(snap, fname, key):
 
 
 def convert(snap, outdir, awq=True, calib=True, attn_bits=8, lm_bits=8, on_progress=None):
-    with open(os.path.join(snap, "config.json")) as f:
-        cfg = json.load(f)
+    cfg = load_model_config(snap)
     desc = build_descriptor(cfg)
+    family = desc["model_type"]
+    wmir = desc.get("wmir") or {}
+
+    # MLA / giant MoE families: emit WMIR + leave weights on SNAP for streamed MoE.
+    if family in MOE_ENGINE_FAMILIES and family not in ("qwen3_5_moe",):
+        log(f"arch {family}: MoE/MLA — writing WMIR-only pack (streamed experts)")
+        return build_wmir_only(snap, outdir)
+
+    # Hybrid MoE (Qwen3.5-A3B): still attempt dense/hybrid KPK for full-attn + linear.
     L, D, I = desc["layers"], desc["hidden"], desc["inter"]
     H, KV, hd = desc["heads"], desc["kv_heads"], desc["head_dim"]
-    log(f"arch {desc['model_type']}: L={L} D={D} I={I} H={H}/{KV} hd={hd} "
-        f"vocab={desc['vocab']} tie={desc['tie_embeddings']}")
+    prefix = desc.get("weight_prefix") or ""
+    log(f"arch {family}: L={L} D={D} I={I} H={H}/{KV} hd={hd} "
+        f"vocab={desc['vocab']} tie={desc['tie_embeddings']} prefix={prefix!r}")
     if on_progress:
         try:
-            on_progress(0, L, f"Converting {desc['model_type']} ({L} layers)…")
+            on_progress(0, L, f"Converting {family} ({L} layers)…")
         except Exception:
             pass
 
     files, index = load_shards(snap)
 
-    def get(key):
-        if key not in index:
-            return None
-        return read_tensor(snap, index[key][0], key)
+    def resolve_key(key):
+        """Map canonical model.* names onto on-disk VL prefixes."""
+        if key in index:
+            return key
+        if prefix:
+            # model.layers.N... ← prefix + layers.N...
+            if key.startswith("model."):
+                alt = prefix + key[len("model."):]
+                if alt in index:
+                    return alt
+            alt2 = prefix + key
+            if alt2 in index:
+                return alt2
+        # Common VL aliases
+        for alt in (
+            "model.language_model." + key[len("model."):] if key.startswith("model.") else None,
+            "language_model.model." + key[len("model."):] if key.startswith("model.") else None,
+            "model.model." + key[len("model."):] if key.startswith("model.") else None,
+        ):
+            if alt and alt in index:
+                return alt
+        return None
 
+    def get(key):
+        real = resolve_key(key)
+        if real is None:
+            return None
+        return read_tensor(snap, index[real][0], real)
+
+    # Detect fused phi-style names under remapped prefixes
     awq_scales, cats, hot = ({}, None, None)
     if calib or awq:
         try:
@@ -436,9 +511,14 @@ def convert(snap, outdir, awq=True, calib=True, attn_bits=8, lm_bits=8, on_progr
         raise RuntimeError("kpk: missing final norm")
     out["model.norm.weight"] = fn
 
-    prefix = "model.layers.{i}."
+    wmir_layers = (wmir.get("layers") or []) if isinstance(wmir, dict) else []
+    layer_prefix = "model.layers.{i}."
     for i in range(L):
-        p = prefix.format(i=i)
+        p = layer_prefix.format(i=i)
+        layer_ops = []
+        if i < len(wmir_layers):
+            layer_ops = [o.get("op") for o in (wmir_layers[i].get("ops") or [])]
+
         in_ln = get(p + "input_layernorm.weight")
         post_ln = get(p + "post_attention_layernorm.weight")
         wq = get(p + "self_attn.q_proj.weight")
@@ -448,6 +528,50 @@ def convert(snap, outdir, awq=True, calib=True, attn_bits=8, lm_bits=8, on_progr
         wg = get(p + "mlp.gate_proj.weight")
         wu = get(p + "mlp.up_proj.weight")
         wd = get(p + "mlp.down_proj.weight")
+
+        # Qwen3.5 linear-attention layers: pack GDN tensors under engine names.
+        if "attn_linear_gdn" in layer_ops and wq is None:
+            if in_ln is not None:
+                out[p + "input_layernorm.weight"] = in_ln
+            if post_ln is not None:
+                out[p + "post_attention_layernorm.weight"] = post_ln
+            for src, dst in (
+                ("linear_attn.in_proj_qkv.weight", "linear_attn.in_proj_qkv.weight"),
+                ("linear_attn.in_proj_a.weight", "linear_attn.in_proj_a.weight"),
+                ("linear_attn.in_proj_b.weight", "linear_attn.in_proj_b.weight"),
+                ("linear_attn.in_proj_z.weight", "linear_attn.in_proj_z.weight"),
+                ("linear_attn.out_proj.weight", "linear_attn.out_proj.weight"),
+                ("linear_attn.conv1d.weight", "linear_attn.conv1d.weight"),
+                ("linear_attn.norm.weight", "linear_attn.norm.weight"),
+                ("linear_attn.A_log", "linear_attn.A_log"),
+                ("linear_attn.dt_bias", "linear_attn.dt_bias"),
+            ):
+                t = get(p + src)
+                if t is not None:
+                    if t.ndim == 2 and t.shape[1] % GS == 0 and t.shape[0] > 64:
+                        put_i8(p + dst, t)
+                    else:
+                        out[p + dst] = np.ascontiguousarray(t, dtype=np.float32)
+            if wg is not None and wu is not None and wd is not None:
+                layer_I = wg.shape[0]
+                if D <= 4096:
+                    put_i8(p + "mlp.gate_proj.weight", wg)
+                    put_i8(p + "mlp.up_proj.weight", wu)
+                    put_i8(p + "mlp.down_proj.weight.t", np.ascontiguousarray(wd.T))
+                else:
+                    put_g64(p + "mlp.gate_proj.weight", wg)
+                    put_g64(p + "mlp.up_proj.weight", wu)
+                    put_g64(p + "mlp.down_proj.weight.t", np.ascontiguousarray(wd.T),
+                            outlier_cols=16)
+            if (i + 1) % 8 == 0 or i == L - 1:
+                log(f"layer {i + 1}/{L} quantized (linear_gdn)")
+            if on_progress:
+                try:
+                    on_progress(i + 1, L, f"Quantizing layer {i + 1}/{L}…")
+                except Exception:
+                    pass
+            continue
+
         if desc.get("fused_qkv") and wq is None:
             qkv = get(p + "self_attn.qkv_proj.weight")
             if qkv is None:
@@ -603,13 +727,14 @@ def convert(snap, outdir, awq=True, calib=True, attn_bits=8, lm_bits=8, on_progr
         with open(meta_path) as f:
             meta = json.load(f)
     meta["windhover"] = {
-        "version": 1,
+        "version": 2,
         "group_size": GS,
         "formats": meta_fmt,
         "awq": bool(awq_scales),
         "down_transposed": True,
         "neurons_permuted_hot_first": hot is not None,
-        "descriptor": desc,
+        "descriptor": {k: v for k, v in desc.items() if k != "wmir"},
+        "wmir": wmir if wmir else None,
         "cats_tau": cats,
         "shards": written,
     }

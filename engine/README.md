@@ -2,8 +2,9 @@
 
 Clean-slate CPU runtime. Primary binary: `windhover-engine` (`kestrel-engine` symlink kept for older scripts).
 
-- **GLM MoE** (`glm_moe_dsa`) — MLA + streamed experts (oracle: `fixtures/glm_tiny`)
-- **Dense / Windhover KPK** (Qwen2 / Llama / Mistral / Gemma / Phi) — sparse working-set + int8 KV
+- **WMIR** (`kestrel.json` → `windhover.wmir`) — architecture-agnostic layer graph; packers lower HF configs via `tools/wmir/`
+- **Dense / Windhover KPK** — GQA (+ KV share, linear GDN, chunked/CSA/MSA windows), SwiGLU/GELU/double-wide MLP
+- **GLM MoE** (`glm_moe_dsa`) — MLA + streamed experts (oracle: `fixtures/glm_tiny`); other MoE families emit WMIR + stream markers
 
 ## Layout
 
@@ -11,9 +12,10 @@ Clean-slate CPU runtime. Primary binary: `windhover-engine` (`kestrel-engine` sy
 |------|------|
 | `io/` | safetensors, tokenizer, json headers |
 | `memory/` | hard RAM budget (`budget.c`) |
+| `runtime/wmir.h` | WMIR schema + loader |
 | `runtime/engine.c` | MoE forward / generate / TF oracle / CLI |
 | `runtime/dense.c` | dense path (`WH=0`) |
-| `runtime/windhover.c` | KPK Windhover runtime |
+| `runtime/windhover.c` | KPK Windhover runtime (WMIR interpreter) |
 | `attn/` `moe/` `model/` `tensor/` | module boundaries for further splits |
 | `fixtures/` | `glm_tiny` + `ref_glm.json` |
 

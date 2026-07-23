@@ -36,10 +36,11 @@ KPK convert via `numpy` + `safetensors`. Lazy imports are **invisible** to Analy
 
 ## Catalog vs engine
 
-- [ ] `python3 tools/catalog_engine_audit.py` exits 0 (no installable model with an
-      unsupported HF `model_type`).
-- [ ] Ready models are only dense-immediate (qwen2/3/llama/mistral) or Phi/Gemma2/3
-      with install-time KPK convert.
+- [ ] `python3 tools/catalog_engine_audit.py` exits 0 (every installable model has a
+      WMIR lowerer + registered ops; `engine_path` matches dense/kpk/moe).
+- [ ] Ready/download models are never `chat: blocked`.
+- [ ] New HF families land as `tools/wmir/lower.py` lowerers first; kernels only if a
+      new op kind is required (`engine/runtime/wmir.h` + `tools/wmir/ops.py`).
 
 ## Do not
 

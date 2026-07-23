@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.11] — 2026-07-23
+
+### Engine — Universal Windhover Model IR (WMIR)
+- Replaced architecture allowlists with a layer-typed IR (`windhover.wmir` in `kestrel.json`).
+- HF configs lower via `tools/wmir/` (Gemma 4, Qwen3.5/3.6, Llama 4, Kimi, DeepSeek V4, MiniMax, Mistral Large 3, plus classic dense/GLM).
+- Runtime executes ops by kind: GQA (+ KV share, chunked/CSA/MSA windows), linear GDN, double-wide MLP, MoE-stream markers.
+- Catalog installable entries now require a WMIR lowerer + registered kernels (`tools/catalog_engine_audit.py`).
+
 ## [0.3.10] — 2026-07-23
 
 ### Catalog

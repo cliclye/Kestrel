@@ -31,6 +31,7 @@ datas = [
     (str(REPO / "tools" / "agent_workspace.py"), "tools"),
     # In-process KPK convert (numpy, no torch) for Phi/Gemma after Library install.
     (str(REPO / "tools" / "kestrel_pack.py"), "tools"),
+    (str(REPO / "tools" / "wmir"), "tools/wmir"),
 ]
 
 binaries = []
@@ -38,6 +39,10 @@ hiddenimports = [
     "bundled_windhover",
     "agent_workspace",
     "kestrel_pack",
+    "wmir",
+    "wmir.lower",
+    "wmir.ops",
+    "wmir.emit",
     "http.server",
     "http.client",
     "urllib.parse",

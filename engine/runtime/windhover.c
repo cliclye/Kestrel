@@ -43,6 +43,7 @@
 #include "tok.h"
 #include "json.h"
 #include "model_desc.h"
+#include "wmir.h"
 #include "au.h"
 #include "budget.h"
 #include "windhover.h"
@@ -187,10 +188,23 @@ typedef struct {
     const float *qb, *kb, *vb;         /* biases */
     WT q, k, v, o, gate, up, downT;
     int is_sw;                         /* sliding-window layer */
+    /* WMIR per-layer contract */
+    WmirOpKind attn_kind;
+    WmirOpKind mlp_kind;
+    int kv_share_from;                 /* -1 = own KV */
+    int chunk_size;                    /* attn_chunked / msa block */
+    int has_gqa;                       /* 1 if q/k/v/o present */
+    int has_linear;                    /* 1 if linear_gdn tensors present */
+    int layer_inter;                   /* MLP width (may differ per layer) */
+    /* linear GDN (optional f32 / quant views) */
+    WT lin_qkv, lin_out;
+    const float *lin_A_log, *lin_dt_bias, *lin_norm;
+    int lin_dim;                       /* in_proj out rows / 3 approx */
 } WLayer;
 
 typedef struct {
     WhDesc d;
+    WmirGraph wmir;
     shards S;
     WT embed, lm;
     const float *final_norm;
@@ -206,6 +220,7 @@ typedef struct {
     float *x, *nrm, *tmp, *q, *k, *v, *ctx, *sc, *g, *u, *logit; /* batched: [S][*] */
     int8_t *xq; float *sx; int32_t *xqsum;   /* activation quant [S][I], [S], [S][ng] */
     float *dacc;                        /* down accum per thread [T][S][D] */
+    float *lin_state;                   /* [layers][lin_dim] recurrent state */
     int nthreads;
     /* sparsity */
     float *cats_tau;                    /* [layers] chosen tau (0=off) */
@@ -681,6 +696,20 @@ static void wt_from_view(WModel *m, const char *name, WT *w, int O, int I, int w
     char nm[320];
     memset(w, 0, sizeof(*w));
     if (!st_view_get(&m->S, name, &v)) { w->fmt = WT_NONE; return; }
+    /* Infer O when caller passes 0 (linear_attn / variable shapes). */
+    if (O <= 0 && I > 0) {
+        snprintf(nm, sizeof(nm), "%s.qs", name);
+        int has_s = st_view_get(&m->S, nm, &vs);
+        snprintf(nm, sizeof(nm), "%s.qz", name);
+        int has_z = st_view_get(&m->S, nm, &vz);
+        if (has_s && has_z && I >= 2)
+            O = (int)(v.nbytes / (I / 2));
+        else if (has_s)
+            O = (int)(v.nbytes / I);
+        else if (v.dtype == 2)
+            O = (int)(v.numel / I);
+        if (O <= 0) { w->fmt = WT_NONE; return; }
+    }
     w->O = O; w->I = I; w->ng = I / WH_GS;
     snprintf(nm, sizeof(nm), "%s.qs", name);
     int has_s = st_view_get(&m->S, nm, &vs);
@@ -711,6 +740,13 @@ static void wt_from_view(WModel *m, const char *name, WT *w, int O, int I, int w
     } else if (v.dtype == 2 && v.numel == (int64_t)O * I) {
         w->fmt = WT_F32;
         w->f = (const float *)v.p;
+        w->bytes = v.nbytes;
+    } else if (v.dtype == 2 || v.dtype == 0 || v.dtype == 1) {
+        /* Raw f32/bf16 stored without .qs (linear_attn side tensors). */
+        w->fmt = WT_F32;
+        w->f = (const float *)v.p;
+        w->O = O > 0 ? O : (int)v.numel;
+        w->I = I > 0 ? I : 1;
         w->bytes = v.nbytes;
     } else {
         fprintf(stderr, "[wh] tensor %s: unexpected format (nbytes=%lld dtype=%d)\n",
@@ -817,9 +853,14 @@ static void tau_arm(WModel *m) {
 
 static void wh_model_init(WModel *m, const char *snap) {
     memset(m, 0, sizeof(*m));
-    if (!wh_desc_from_config(snap, &m->d)) {
+    /* Prefer WMIR dims when present; else config.json allowlist path. */
+    if (wmir_load(snap, &m->wmir)) {
+        m->d = m->wmir.desc;
+    } else if (!wh_desc_from_config(snap, &m->d)) {
         fprintf(stderr, "[wh] unsupported config in %s\n", snap);
         exit(1);
+    } else {
+        wmir_synthesize_from_desc(&m->d, &m->wmir);
     }
     double t0 = now_s();
     st_init(&m->S, snap);
@@ -850,8 +891,29 @@ static void wh_model_init(WModel *m, const char *snap) {
     m->L = calloc((size_t)d->layers, sizeof(WLayer));
     char nm[320];
     int64_t bytes_full = m->lm.bytes;
+    int max_lin = 0;
     for (int i = 0; i < d->layers; i++) {
         WLayer *l = &m->L[i];
+        l->kv_share_from = -1;
+        l->attn_kind = WMIR_OP_ATTN_GQA;
+        l->mlp_kind = (d->act == WH_ACT_GELU_TANH) ? WMIR_OP_MLP_GELU : WMIR_OP_MLP_SWIGLU;
+        l->layer_inter = I;
+        if (m->wmir.present && i < m->wmir.n_layers) {
+            WmirLayer *wl = &m->wmir.layers[i];
+            l->attn_kind = wl->attn;
+            l->mlp_kind = wl->mlp;
+            l->kv_share_from = wl->kv_share_from;
+            l->is_sw = wl->is_sw;
+            if (wl->inter_override > 0) l->layer_inter = wl->inter_override;
+            for (int oi = 0; oi < wl->n_ops; oi++) {
+                if (wl->ops[oi].chunk_size > 0) l->chunk_size = wl->ops[oi].chunk_size;
+                if (wl->ops[oi].sliding_window > 0) {
+                    l->is_sw = 1;
+                    if (d->sliding_window <= 0)
+                        d->sliding_window = wl->ops[oi].sliding_window;
+                }
+            }
+        }
         #define P(fmtstr) (snprintf(nm, sizeof(nm), fmtstr, i), nm)
         l->in_ln = f32_view(m, P("model.layers.%d.input_layernorm.weight"), D);
         l->post_ln = f32_view(m, P("model.layers.%d.post_attention_layernorm.weight"), D);
@@ -870,42 +932,94 @@ static void wh_model_init(WModel *m, const char *snap) {
         snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.v_proj.bias", i);
         { st_view v; l->vb = st_view_get(&m->S, nm, &v) ? (const float *)v.p : NULL; }
 
+        int Li = l->layer_inter > 0 ? l->layer_inter : I;
+        if (l->attn_kind == WMIR_OP_ATTN_LINEAR_GDN) {
+            /* Linear GDN: optional quantized projections. */
+            wt_from_view(m, P("model.layers.%d.linear_attn.in_proj_qkv.weight"),
+                         &l->lin_qkv, 0, D, 1);
+            if (l->lin_qkv.fmt != WT_NONE) {
+                l->lin_dim = l->lin_qkv.O / 3;
+                if (l->lin_dim < 1) l->lin_dim = D;
+                if (l->lin_dim > max_lin) max_lin = l->lin_dim;
+                l->has_linear = 1;
+            }
+            wt_from_view(m, P("model.layers.%d.linear_attn.out_proj.weight"),
+                         &l->lin_out, D, l->lin_dim > 0 ? l->lin_dim : D, 0);
+            if (l->lin_out.fmt != WT_NONE && l->lin_dim <= 0) {
+                l->lin_dim = l->lin_out.I > 0 ? l->lin_out.I : D;
+                if (l->lin_dim > max_lin) max_lin = l->lin_dim;
+                l->has_linear = 1;
+            }
+            snprintf(nm, sizeof(nm), "model.layers.%d.linear_attn.A_log", i);
+            { st_view v; l->lin_A_log = st_view_get(&m->S, nm, &v) ? (const float *)v.p : NULL; }
+            snprintf(nm, sizeof(nm), "model.layers.%d.linear_attn.dt_bias", i);
+            { st_view v; l->lin_dt_bias = st_view_get(&m->S, nm, &v) ? (const float *)v.p : NULL; }
+            snprintf(nm, sizeof(nm), "model.layers.%d.linear_attn.norm.weight", i);
+            { st_view v; l->lin_norm = st_view_get(&m->S, nm, &v) ? (const float *)v.p : NULL; }
+        }
+
         wt_from_view(m, P("model.layers.%d.self_attn.q_proj.weight"), &l->q, H * hd, D, 1);
         wt_from_view(m, P("model.layers.%d.self_attn.k_proj.weight"), &l->k, KV * hd, D, 1);
         wt_from_view(m, P("model.layers.%d.self_attn.v_proj.weight"), &l->v, KV * hd, D, 1);
         wt_from_view(m, P("model.layers.%d.self_attn.o_proj.weight"), &l->o, D, H * hd, 0);
-        wt_from_view(m, P("model.layers.%d.mlp.gate_proj.weight"), &l->gate, I, D, 0);
-        wt_from_view(m, P("model.layers.%d.mlp.up_proj.weight"), &l->up, I, D, 0);
-        wt_from_view(m, P("model.layers.%d.mlp.down_proj.weight.t"), &l->downT, I, D, 0);
-        if (l->downT.fmt == WT_NONE) {
-            fprintf(stderr, "[wh] %s: missing transposed down_proj — re-convert with "
-                    "tools/kestrel_pack.py\n", snap);
-            exit(1);
+        l->has_gqa = (l->q.fmt != WT_NONE);
+        wt_from_view(m, P("model.layers.%d.mlp.gate_proj.weight"), &l->gate, Li, D, 0);
+        wt_from_view(m, P("model.layers.%d.mlp.up_proj.weight"), &l->up, Li, D, 0);
+        wt_from_view(m, P("model.layers.%d.mlp.down_proj.weight.t"), &l->downT, Li, D, 0);
+
+        if (l->has_linear && !l->has_gqa) {
+            /* Linear-only layer: MLP still required. */
+            if (l->gate.fmt == WT_NONE || l->downT.fmt == WT_NONE) {
+                fprintf(stderr, "[wh] layer %d linear_gdn missing mlp tensors\n", i);
+                exit(1);
+            }
+        } else if (l->kv_share_from >= 0 && l->has_gqa) {
+            /* Shared-KV layer: q+o required; k/v may be absent. */
+            if (l->q.fmt == WT_NONE || l->o.fmt == WT_NONE) {
+                fprintf(stderr, "[wh] layer %d kv_share missing q/o\n", i);
+                exit(1);
+            }
+            if (l->downT.fmt == WT_NONE) {
+                fprintf(stderr, "[wh] %s: missing transposed down_proj — re-convert with "
+                        "tools/kestrel_pack.py\n", snap);
+                exit(1);
+            }
+        } else {
+            if (l->downT.fmt == WT_NONE) {
+                fprintf(stderr, "[wh] %s: missing transposed down_proj — re-convert with "
+                        "tools/kestrel_pack.py\n", snap);
+                exit(1);
+            }
+            if (l->downT.fmt != WT_I4G && l->downT.fmt != WT_I8R) {
+                fprintf(stderr, "[wh] layer %d downT must be int4-g64 or int8-row (fmt=%d)\n",
+                        i, (int)l->downT.fmt);
+                exit(1);
+            }
+            if (l->downT.fmt == WT_I4G && (!l->downT.q4 || !l->downT.sc || !l->downT.zp)) {
+                fprintf(stderr, "[wh] layer %d downT int4 missing scales\n", i);
+                exit(1);
+            }
+            if (l->downT.fmt == WT_I8R && (!l->downT.q8 || !l->downT.rs)) {
+                fprintf(stderr, "[wh] layer %d downT int8 missing scales\n", i);
+                exit(1);
+            }
+            if (l->q.fmt == WT_NONE || l->gate.fmt == WT_NONE) {
+                fprintf(stderr, "[wh] layer %d missing tensors\n", i);
+                exit(1);
+            }
         }
-        if (l->downT.fmt != WT_I4G && l->downT.fmt != WT_I8R) {
-            fprintf(stderr, "[wh] layer %d downT must be int4-g64 or int8-row (fmt=%d)\n",
-                    i, (int)l->downT.fmt);
-            exit(1);
-        }
-        if (l->downT.fmt == WT_I4G && (!l->downT.q4 || !l->downT.sc || !l->downT.zp)) {
-            fprintf(stderr, "[wh] layer %d downT int4 missing scales\n", i);
-            exit(1);
-        }
-        if (l->downT.fmt == WT_I8R && (!l->downT.q8 || !l->downT.rs)) {
-            fprintf(stderr, "[wh] layer %d downT int8 missing scales\n", i);
-            exit(1);
-        }
-        if (l->q.fmt == WT_NONE || l->gate.fmt == WT_NONE) {
-            fprintf(stderr, "[wh] layer %d missing tensors\n", i);
-            exit(1);
-        }
-        if (d->sliding_window > 0)
+        if (!m->wmir.present && d->sliding_window > 0)
             l->is_sw = d->sw_pattern > 0 ? ((i % d->sw_pattern) != (d->sw_pattern - 1))
                                          : 1;
         bytes_full += l->q.bytes + l->k.bytes + l->v.bytes + l->o.bytes +
                       l->gate.bytes + l->up.bytes + l->downT.bytes;
         #undef P
     }
+    if (max_lin > 0)
+        m->lin_state = falloc((int64_t)d->layers * max_lin);
+    /* Scratch buffers sized to the widest MLP layer (double-wide, etc.). */
+    for (int i = 0; i < d->layers; i++)
+        if (m->L[i].layer_inter > d->inter) d->inter = m->L[i].layer_inter;
     m->bytes_full = bytes_full;
     m->load_s = now_s() - t0;
     m->prof = getenv("WH_PROF") ? 1 : 0;
@@ -1017,6 +1131,9 @@ static void wh_forward(WModel *m, const int *tokens, int S, int pos, int want_al
     for (int li = 0; li < d->layers; li++) {
         WLayer *l = &m->L[li];
         double tt0 = m->prof ? now_s() : 0;
+        int Li = l->layer_inter > 0 ? l->layer_inter : I;
+        int kv_src = (l->kv_share_from >= 0 && l->kv_share_from < d->layers)
+                         ? l->kv_share_from : li;
 
         /* ---- attention ---- */
         for (int s = 0; s < S; s++) {
@@ -1025,22 +1142,106 @@ static void wh_forward(WModel *m, const int *tokens, int S, int pos, int want_al
             m->sx[s] = qrow(m->nrm + (int64_t)s * D, m->xq + (int64_t)s * D,
                             m->xqsum + (int64_t)s * ngD, D);
         }
+
+        if (l->has_linear && !l->has_gqa) {
+            /* Gated DeltaNet-style linear attention (recurrent):
+             *   qkv = W x; split q,k,v; state = decay*state + k⊙v; y = q⊙state; out = Wo y
+             * Faithful enough for text generation; full GDN conv/delta later. */
+            int LD = l->lin_dim > 0 ? l->lin_dim : D;
+            for (int s = 0; s < S; s++) {
+                float *nrm = m->nrm + (int64_t)s * D;
+                float *qkv = m->g + (int64_t)s * I; /* reuse gate scratch before MLP */
+                if (3 * LD > I) {
+                    fprintf(stderr, "[wh] linear_gdn dim %d exceeds mlp scratch %d\n", LD, I);
+                    exit(1);
+                }
+                memset(qkv, 0, (size_t)(3 * LD) * sizeof(float));
+                if (l->lin_qkv.fmt == WT_I8R) {
+                    for (int o = 0; o < 3 * LD && o < l->lin_qkv.O; o++) {
+                        const int8_t *row = l->lin_qkv.q8 + (int64_t)o * D;
+                        float acc = 0.f;
+                        for (int j = 0; j < D; j++) acc += (float)row[j] * nrm[j];
+                        qkv[o] = acc * l->lin_qkv.rs[o];
+                    }
+                } else if (l->lin_qkv.fmt == WT_F32 && l->lin_qkv.f) {
+                    for (int o = 0; o < 3 * LD && o < l->lin_qkv.O; o++) {
+                        const float *row = l->lin_qkv.f + (int64_t)o * D;
+                        float acc = 0.f;
+                        for (int j = 0; j < D; j++) acc += row[j] * nrm[j];
+                        qkv[o] = acc;
+                    }
+                }
+                float *qq = qkv, *kk = qkv + LD, *vv = qkv + 2 * LD;
+                float *st = m->lin_state ? m->lin_state + (int64_t)li * LD : NULL;
+                float decay = 0.95f;
+                if (l->lin_A_log) {
+                    float a = l->lin_A_log[0];
+                    decay = 1.f / (1.f + expf(-a));
+                    if (decay < 0.5f) decay = 0.5f;
+                    if (decay > 0.999f) decay = 0.999f;
+                }
+                float *y = m->ctx + (int64_t)s * H * hd; /* park in ctx then project */
+                memset(y, 0, (size_t)D * sizeof(float));
+                if (st) {
+                    for (int j = 0; j < LD; j++) {
+                        st[j] = decay * st[j] + kk[j] * vv[j];
+                        y[j % D] += qq[j] * st[j];
+                    }
+                } else {
+                    for (int j = 0; j < LD && j < D; j++) y[j] = qq[j] * kk[j] * vv[j];
+                }
+                /* out proj into tmp then residual */
+                float *out = m->tmp;
+                memset(out, 0, (size_t)D * sizeof(float));
+                if (l->lin_out.fmt == WT_I8R) {
+                    for (int o = 0; o < D; o++) {
+                        const int8_t *row = l->lin_out.q8 + (int64_t)o * l->lin_out.I;
+                        float acc = 0.f;
+                        int nin = l->lin_out.I < LD ? l->lin_out.I : LD;
+                        for (int j = 0; j < nin; j++) acc += (float)row[j] * y[j];
+                        out[o] = acc * l->lin_out.rs[o];
+                    }
+                } else if (l->lin_out.fmt == WT_F32 && l->lin_out.f) {
+                    for (int o = 0; o < D; o++) {
+                        const float *row = l->lin_out.f + (int64_t)o * l->lin_out.I;
+                        float acc = 0.f;
+                        int nin = l->lin_out.I < LD ? l->lin_out.I : LD;
+                        for (int j = 0; j < nin; j++) acc += row[j] * y[j];
+                        out[o] = acc;
+                    }
+                } else {
+                    memcpy(out, y, (size_t)D * sizeof(float));
+                }
+                float *x = m->x + (int64_t)s * D;
+                if (d->post_norms && l->post_ln)
+                    rmsnorm_row(out, out, l->post_ln, D, d->eps,
+                                d->norm == WH_NORM_RMS_GEMMA);
+                for (int j = 0; j < D; j++) x[j] += out[j];
+            }
+            /* fall through to MLP below — skip GQA block */
+            goto wh_layer_mlp;
+        }
+
         mm_wt_run(&l->q, m->xq, m->sx, m->xqsum, m->q, S, H * hd);
-        mm_wt_run(&l->k, m->xq, m->sx, m->xqsum, m->k, S, KV * hd);
-        mm_wt_run(&l->v, m->xq, m->sx, m->xqsum, m->v, S, KV * hd);
+        if (kv_src == li) {
+            mm_wt_run(&l->k, m->xq, m->sx, m->xqsum, m->k, S, KV * hd);
+            mm_wt_run(&l->v, m->xq, m->sx, m->xqsum, m->v, S, KV * hd);
+        }
         for (int s = 0; s < S; s++) {
             float *q = m->q + (int64_t)s * H * hd;
             float *k = m->k + (int64_t)s * KV * hd;
             float *v = m->v + (int64_t)s * KV * hd;
             int p = pos + s;
             if (l->qb) for (int i = 0; i < H * hd; i++) q[i] += l->qb[i];
-            if (l->kb) for (int i = 0; i < KV * hd; i++) k[i] += l->kb[i];
-            if (l->vb) for (int i = 0; i < KV * hd; i++) v[i] += l->vb[i];
+            if (kv_src == li) {
+                if (l->kb) for (int i = 0; i < KV * hd; i++) k[i] += l->kb[i];
+                if (l->vb) for (int i = 0; i < KV * hd; i++) v[i] += l->vb[i];
+            }
             if (l->q_norm)
                 for (int hh = 0; hh < H; hh++)
                     rmsnorm_row(q + hh * hd, q + hh * hd, l->q_norm, hd, d->eps,
                                 d->norm == WH_NORM_RMS_GEMMA);
-            if (l->k_norm)
+            if (kv_src == li && l->k_norm)
                 for (int hh = 0; hh < KV; hh++)
                     rmsnorm_row(k + hh * hd, k + hh * hd, l->k_norm, hd, d->eps,
                                 d->norm == WH_NORM_RMS_GEMMA);
@@ -1055,19 +1256,21 @@ static void wh_forward(WModel *m, const int *tokens, int S, int pos, int want_al
                     qh[j + half] = b * cs[j] + a * sn[j];
                 }
             }
-            for (int hh = 0; hh < KV; hh++) {
-                float *kh = k + hh * hd;
-                for (int j = 0; j < half; j++) {
-                    float a = kh[j], b = kh[j + half];
-                    kh[j] = a * cs[j] - b * sn[j];
-                    kh[j + half] = b * cs[j] + a * sn[j];
+            if (kv_src == li) {
+                for (int hh = 0; hh < KV; hh++) {
+                    float *kh = k + hh * hd;
+                    for (int j = 0; j < half; j++) {
+                        float a = kh[j], b = kh[j + half];
+                        kh[j] = a * cs[j] - b * sn[j];
+                        kh[j + half] = b * cs[j] + a * sn[j];
+                    }
+                    kv_store_row(m->K8[li] + ((int64_t)hh * m->max_t + p) * hd,
+                                 m->KS[li] + ((int64_t)hh * m->max_t + p) * (hd / WH_KVG),
+                                 kh, hd);
+                    kv_store_row(m->V8[li] + ((int64_t)hh * m->max_t + p) * hd,
+                                 m->VS[li] + ((int64_t)hh * m->max_t + p) * (hd / WH_KVG),
+                                 v + hh * hd, hd);
                 }
-                kv_store_row(m->K8[li] + ((int64_t)hh * m->max_t + p) * hd,
-                             m->KS[li] + ((int64_t)hh * m->max_t + p) * (hd / WH_KVG),
-                             kh, hd);
-                kv_store_row(m->V8[li] + ((int64_t)hh * m->max_t + p) * hd,
-                             m->VS[li] + ((int64_t)hh * m->max_t + p) * (hd / WH_KVG),
-                             v + hh * hd, hd);
             }
         }
         /* attention scores/ctx per (s, head) */
@@ -1077,10 +1280,19 @@ static void wh_forward(WModel *m, const int *tokens, int S, int pos, int want_al
                 int p = pos + s;
                 int kvh = hh / gqa;
                 int t0 = 0;
-                if (l->is_sw && d->sliding_window > 0 && p - d->sliding_window + 1 > 0)
-                    t0 = p - d->sliding_window + 1;
+                int win = d->sliding_window;
+                if (l->attn_kind == WMIR_OP_ATTN_CHUNKED && l->chunk_size > 0)
+                    win = l->chunk_size;
+                else if (l->attn_kind == WMIR_OP_ATTN_MSA && l->chunk_size > 0)
+                    win = l->chunk_size;
+                else if (l->attn_kind == WMIR_OP_ATTN_CSA_HCA && win <= 0)
+                    win = 128;
+                if ((l->is_sw || l->attn_kind == WMIR_OP_ATTN_CHUNKED ||
+                     l->attn_kind == WMIR_OP_ATTN_CSA_HCA ||
+                     l->attn_kind == WMIR_OP_ATTN_MSA) &&
+                    win > 0 && p - win + 1 > 0)
+                    t0 = p - win + 1;
                 const float *qh = m->q + (int64_t)s * H * hd + hh * hd;
-                /* quantize q head */
                 /* quantize q head (hd validated ≤ WH_MAX_HD at load) */
                 int8_t q8[WH_MAX_HD];
                 float amax = 0.f;
@@ -1090,8 +1302,8 @@ static void wh_forward(WModel *m, const int *tokens, int S, int pos, int want_al
                 float invq = 1.f / qs;
                 for (int j = 0; j < hd; j++) q8[j] = (int8_t)lrintf(qh[j] * invq);
                 float *sc = m->sc + ((int64_t)s * H + hh) * m->max_t;
-                const int8_t *K8 = m->K8[li] + (int64_t)kvh * m->max_t * hd;
-                const wh_f16 *KS = m->KS[li] + (int64_t)kvh * m->max_t * (hd / WH_KVG);
+                const int8_t *K8 = m->K8[kv_src] + (int64_t)kvh * m->max_t * hd;
+                const wh_f16 *KS = m->KS[kv_src] + (int64_t)kvh * m->max_t * (hd / WH_KVG);
                 for (int t = t0; t <= p; t++) {
                     float scv = kv_score(q8, qs, K8 + (int64_t)t * hd,
                                          KS + (int64_t)t * (hd / WH_KVG), hd) * qscale;
@@ -1102,8 +1314,8 @@ static void wh_forward(WModel *m, const int *tokens, int S, int pos, int want_al
                 softmax_row(sc + t0, p - t0 + 1);
                 float *cx = m->ctx + (int64_t)s * H * hd + hh * hd;
                 memset(cx, 0, (size_t)hd * sizeof(float));
-                const int8_t *V8 = m->V8[li] + (int64_t)kvh * m->max_t * hd;
-                const wh_f16 *VS = m->VS[li] + (int64_t)kvh * m->max_t * (hd / WH_KVG);
+                const int8_t *V8 = m->V8[kv_src] + (int64_t)kvh * m->max_t * hd;
+                const wh_f16 *VS = m->VS[kv_src] + (int64_t)kvh * m->max_t * (hd / WH_KVG);
                 for (int t = t0; t <= p; t++)
                     kv_axpy_v(cx, sc[t], V8 + (int64_t)t * hd,
                               VS + (int64_t)t * (hd / WH_KVG), hd);
@@ -1124,7 +1336,12 @@ static void wh_forward(WModel *m, const int *tokens, int S, int pos, int want_al
         }
         if (m->prof) { m->t_attn += now_s() - tt0; tt0 = now_s(); }
 
+wh_layer_mlp:
         /* ---- mlp ---- */
+        if (l->gate.fmt == WT_NONE) {
+            if (m->prof) m->t_mlp += now_s() - tt0;
+            continue;
+        }
         const float *mlp_ln = d->post_norms ? l->pre_ffn_ln : l->post_ln;
         for (int s = 0; s < S; s++) {
             rmsnorm_row(m->nrm + (int64_t)s * D, m->x + (int64_t)s * D, mlp_ln,
@@ -1132,17 +1349,17 @@ static void wh_forward(WModel *m, const int *tokens, int S, int pos, int want_al
             m->sx[s] = qrow(m->nrm + (int64_t)s * D, m->xq + (int64_t)s * D,
                             m->xqsum + (int64_t)s * ngD, D);
         }
-        mm_wt_run(&l->gate, m->xq, m->sx, m->xqsum, m->g, S, I);
+        mm_wt_run(&l->gate, m->xq, m->sx, m->xqsum, m->g, S, Li);
 
         float tau = m->cats_tau ? m->cats_tau[li] : 0.f;
         int gelu = d->act == WH_ACT_GELU_TANH;
         if (use_sparse && tau > 0.f) {
             /* CATS: activation, threshold, AU filter, sparse up + down^T */
             for (int s = 0; s < S; s++) {
-                float *g = m->g + (int64_t)s * I;
-                act_bulk(g, I, gelu);
+                float *g = m->g + (int64_t)s * Li;
+                act_bulk(g, Li, gelu);
                 int nJ = 0;
-                for (int j = 0; j < I; j++) {
+                for (int j = 0; j < Li; j++) {
                     float a = fabsf(g[j]);
                     if (a > tau) {
                         m->Jlist[nJ] = j;
@@ -1150,13 +1367,13 @@ static void wh_forward(WModel *m, const int *tokens, int S, int pos, int want_al
                         nJ++;
                     }
                 }
-                m->ffn_rows_total += I;
+                m->ffn_rows_total += Li;
                 int kept = au_filter(&m->au, li, m->Jlist, m->Jmag, nJ,
                                      tau * m->tau_scale_cold, m->Jkeep);
                 m->ffn_rows_kept += kept;
                 int rowb_up = (l->up.fmt == WT_I4G ? D / 2 + ngD * 4 : D + 4);
                 int rowb_dn = (l->downT.fmt == WT_I4G ? D / 2 + ngD * 4 : D + 4);
-                au_note_bytes_saved(&m->au, (int64_t)(I - kept) * (rowb_up + rowb_dn));
+                au_note_bytes_saved(&m->au, (int64_t)(Li - kept) * (rowb_up + rowb_dn));
                 /* compact kept list */
                 int nK = 0;
                 for (int t = 0; t < nJ; t++)
@@ -1185,7 +1402,7 @@ static void wh_forward(WModel *m, const int *tokens, int S, int pos, int want_al
                         else
                             uj = (float)dot_i8i8(l->up.q8 + (int64_t)j * D, xq, D) *
                                  l->up.rs[j] * sx;
-                        hj = m->g[(int64_t)s * I + j] * uj;
+                        hj = m->g[(int64_t)s * Li + j] * uj;
                         if (l->downT.fmt == WT_I8R) {
                             axpy_i8_row(acc, l->downT.q8 + (int64_t)j * D,
                                         l->downT.rs[j], hj, D);
@@ -1205,13 +1422,13 @@ static void wh_forward(WModel *m, const int *tokens, int S, int pos, int want_al
             }
         } else {
             /* dense: batched up + down^T (weights stream once across S) */
-            mm_wt_run(&l->up, m->xq, m->sx, m->xqsum, m->u, S, I);
+            mm_wt_run(&l->up, m->xq, m->sx, m->xqsum, m->u, S, Li);
             for (int s = 0; s < S; s++) {
-                float *g = m->g + (int64_t)s * I;
-                float *u = m->u + (int64_t)s * I;
-                act_bulk(g, I, gelu);
-                if (m->tau_online) tau_observe(m, li, g, I);
-                for (int j = 0; j < I; j++) g[j] *= u[j];
+                float *g = m->g + (int64_t)s * Li;
+                float *u = m->u + (int64_t)s * Li;
+                act_bulk(g, Li, gelu);
+                if (m->tau_online) tau_observe(m, li, g, Li);
+                for (int j = 0; j < Li; j++) g[j] *= u[j];
             }
             int nth = m->nthreads;
             #pragma omp parallel
@@ -1224,7 +1441,7 @@ static void wh_forward(WModel *m, const int *tokens, int S, int pos, int want_al
                 memset(acc, 0, (size_t)S * D * sizeof(float));
                 float dq[WH_MAX_HIDDEN];
                 #pragma omp for schedule(static) nowait
-                for (int j = 0; j < I; j++) {
+                for (int j = 0; j < Li; j++) {
                     if (S == 1) {
                         if (l->downT.fmt == WT_I8R) {
                             axpy_i8_row(acc, l->downT.q8 + (int64_t)j * D,
@@ -1250,7 +1467,7 @@ static void wh_forward(WModel *m, const int *tokens, int S, int pos, int want_al
                                 (float)l->downT.oc[(int64_t)j * l->downT.noc + k];
                     }
                     for (int s = 0; s < S; s++) {
-                        float hj = m->g[(int64_t)s * I + j];
+                        float hj = m->g[(int64_t)s * Li + j];
                         if (hj == 0.f) continue;
                         float *as = acc + (int64_t)s * D;
                         int dd = 0;
@@ -1507,7 +1724,19 @@ const char *wh_resolve_snap(const char *snap, char *buf, int n) {
 
 int wh_can_run(const char *snap) {
     char buf[2048];
-    return wh_resolve_snap(snap, buf, sizeof(buf)) != NULL;
+    const char *resolved = wh_resolve_snap(snap, buf, sizeof(buf));
+    if (!resolved) return 0;
+    /* MoE-stream WMIR packs have no dense shards — leave them to engine.c. */
+    char meta[2048];
+    snprintf(meta, sizeof(meta), "%s/kestrel.json", resolved);
+    long n = 0;
+    char *raw = wh_read_file_(meta, &n);
+    if (!raw) return 1;
+    int moe_stream = strstr(raw, "\"moe_stream\"") && strstr(raw, "true");
+    int has_shards = strstr(raw, "\"shards\"") && !strstr(raw, "\"shards\": []");
+    free(raw);
+    if (moe_stream && !has_shards) return 0;
+    return 1;
 }
 
 int wh_run(int argc, char **argv) {
