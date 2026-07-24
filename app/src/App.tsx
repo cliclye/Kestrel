@@ -16,9 +16,33 @@ type CatalogModel = {
   status?: string;
   ram_gb?: number;
   hf_repo?: string;
+  preview_repo?: string;
   engine?: string;
   chat?: string;
   tier?: string;
+};
+
+type HfModelInfo = {
+  ok?: boolean;
+  id?: string;
+  error?: string;
+  downloads?: number;
+  likes?: number;
+  pipeline_tag?: string;
+  library_name?: string;
+  license?: string;
+  created_at?: string;
+  last_modified?: string;
+  tags?: string[];
+  parameters?: number;
+  card_summary?: string | null;
+  benchmarks?: Array<{
+    task?: string;
+    dataset?: string;
+    metric?: string;
+    value?: number | string;
+  }>;
+  html_url?: string;
 };
 
 type Installed = {
@@ -203,6 +227,32 @@ function statusBadge(m: CatalogModel) {
   return { cls: "download", label: m.status || "Download" };
 }
 
+function extractSSE(buffer: string) {
+  const frames = buffer.split(/\r?\n\r?\n/);
+  const rest = frames.pop() || "";
+  const data = frames.flatMap((frame) =>
+    frame
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+  );
+  return { data, rest };
+}
+
+function formatCount(n?: number) {
+  if (n == null || Number.isNaN(n)) return "—";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+function formatParams(n?: number) {
+  if (n == null || Number.isNaN(n)) return "—";
+  if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+  return String(n);
+}
+
 function cleanChatText(text: string): string {
   let s = text;
   // Truncate runaway decode at the first turn-ending marker
@@ -366,9 +416,14 @@ export function App() {
   } | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateMsg, setUpdateMsg] = useState("");
+  const [modelInfoOpen, setModelInfoOpen] = useState<CatalogModel | null>(null);
+  const [modelInfo, setModelInfo] = useState<HfModelInfo | null>(null);
+  const [modelInfoBusy, setModelInfoBusy] = useState(false);
+  const [modelInfoErr, setModelInfoErr] = useState("");
   const threadRef = useRef<HTMLDivElement>(null);
   const busyRef = useRef<string | null>(null);
   const progressRef = useRef<PullProgress | null>(null);
+  const chatAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     busyRef.current = busy;
@@ -685,6 +740,27 @@ export function App() {
     }
   }
 
+  async function openModelInfo(m: CatalogModel) {
+    setModelInfoOpen(m);
+    setModelInfo(null);
+    setModelInfoErr("");
+    setModelInfoBusy(true);
+    try {
+      const repo = m.hf_repo || m.preview_repo || m.id;
+      const j = (await fetch(
+        apiUrl(`/v1/model-info?repo=${encodeURIComponent(repo)}&model=${encodeURIComponent(m.id)}`)
+      ).then((r) => r.json())) as HfModelInfo;
+      if (!j?.ok) {
+        setModelInfoErr(String(j?.error || "Could not load Hugging Face info."));
+      }
+      setModelInfo(j);
+    } catch (e) {
+      setModelInfoErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setModelInfoBusy(false);
+    }
+  }
+
   async function send() {
     const text = input.trim();
     if (!text || sending) return;
@@ -694,91 +770,154 @@ export function App() {
       setTab("library");
       return;
     }
+    chatAbortRef.current?.abort();
+    const ac = new AbortController();
+    chatAbortRef.current = ac;
+    const hardTimer = window.setTimeout(() => ac.abort(), 600_000);
+
     setSending(true);
     setInput("");
     const next = [...messages, { role: "user" as const, content: text }];
     setMessages(next);
+    let assistant = "";
+    let gotToken = false;
+
+    const paint = (content: string, stats?: ChatStats) => {
+      setMessages([...next, { role: "assistant", content, stats }]);
+    };
+
+    const useStream = !isOllamaModel(
+      matchInstalled(chatCapable, modelId) || { id: modelId }
+    );
     try {
       const r = await fetch(apiUrl("/v1/chat/completions"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: ac.signal,
         body: JSON.stringify({
           model: modelId,
           messages: next.map(({ role, content }) => ({ role, content })),
           max_tokens: 512,
           temperature: 0.7,
+          stream: useStream,
         }),
       });
-      const j = await r.json();
-      const st = (j?.stats || {}) as ChatStats;
-      if (typeof j?.engine_active === "boolean") st.engine_active = j.engine_active;
-      if (j?.code === "engine_inactive" || j?.engine_active === false) {
-        st.engine_active = false;
-        if (j?.error) st.engine_error = String(j.error);
-      }
 
-      // Phi/Gemma first-run: weights convert in the background — poll then nudge retry.
-      if (j?.code === "engine_preparing" || (r.status === 202 && j?.job_id)) {
-        const label = String(j?.id || modelId);
-        setMessages([
-          ...next,
-          {
-            role: "assistant",
-            content:
-              String(j?.error || "") ||
-              `Preparing ${label} for windhover-engine. This is a one-time convert and can take a few minutes on Windows. I'll show progress — send again when it finishes.`,
-            stats: { engine_active: false, backend: "preparing" },
-          },
-        ]);
-        setSending(false);
-        await pollPrepareJob(String(j.job_id), label);
-        return;
-      }
-
-      if (!r.ok || j?.code === "engine_inactive") {
-        const errMsg =
-          String(j?.error || `Chat failed (${r.status})`) +
-          (j?.detail ? `\n\n${j.detail}` : "");
+      const ctype = r.headers.get("content-type") || "";
+      if (!useStream || !ctype.includes("text/event-stream")) {
+        const j = await r.json();
+        const st = (j?.stats || {}) as ChatStats;
+        if (typeof j?.engine_active === "boolean") st.engine_active = j.engine_active;
+        if (j?.code === "engine_inactive" || j?.engine_active === false) {
+          st.engine_active = false;
+          if (j?.error) st.engine_error = String(j.error);
+        }
+        if (j?.code === "engine_preparing" || (r.status === 202 && j?.job_id)) {
+          const label = String(j?.id || modelId);
+          paint(
+            String(j?.error || "") ||
+              `Preparing ${label} for windhover-engine. This is a one-time convert and can take a few minutes. Send again when it finishes.`,
+            { engine_active: false, backend: "preparing" }
+          );
+          setSending(false);
+          await pollPrepareJob(String(j.job_id), label);
+          return;
+        }
+        if (!r.ok || j?.code === "engine_inactive") {
+          const errMsg =
+            String(j?.error || `Chat failed (${r.status})`) +
+            (j?.detail ? `\n\n${j.detail}` : "");
+          setLastStats(st);
+          setStatus(
+            j?.code === "engine_inactive" || r.status === 503
+              ? "Windhover engine is not active"
+              : String(j?.error || "Chat failed")
+          );
+          paint(errMsg, { ...st, engine_active: false, backend: st.backend || "error" });
+          void refresh();
+          return;
+        }
+        const content = j?.choices?.[0]?.message?.content || j?.error || "No response.";
         setLastStats(st);
-        setStatus(
-          j?.code === "engine_inactive" || r.status === 503
-            ? "Windhover engine is not active"
-            : String(j?.error || "Chat failed")
-        );
-        setMessages([
-          ...next,
-          {
-            role: "assistant",
-            content: errMsg,
-            stats: { ...st, engine_active: false, backend: st.backend || "error" },
-          },
-        ]);
+        paint(String(content), st);
         void refresh();
         return;
       }
-      const content =
-        j?.choices?.[0]?.message?.content ||
-        j?.error ||
-        "No response.";
-      setLastStats(st);
-      if (st.engine_active === false || st.fallback_from) {
-        setStatus(st.engine_error || "Windhover engine inactive — reply used fallback");
+
+      if (!r.ok || !r.body) {
+        paint(`Chat failed (${r.status})`);
+        setStatus("Chat request failed");
+        return;
       }
-      setMessages([
-        ...next,
-        {
-          role: "assistant",
-          content: String(content),
-          stats: st,
-        },
-      ]);
+
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      let finalStats: ChatStats | undefined;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const { data, rest } = extractSSE(buf);
+        buf = rest;
+        for (const line of data) {
+          if (!line || line === "[DONE]") continue;
+          let obj: {
+            error?: string;
+            code?: string;
+            detail?: string;
+            stats?: ChatStats;
+            choices?: Array<{ delta?: { content?: string }; finish_reason?: string | null }>;
+          };
+          try {
+            obj = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (obj.error || obj.code === "engine_inactive") {
+            const errMsg =
+              String(obj.error || "Engine inactive") + (obj.detail ? `\n\n${obj.detail}` : "");
+            paint(errMsg, {
+              ...(obj.stats || {}),
+              engine_active: false,
+              backend: "error",
+            });
+            setStatus(obj.code === "engine_inactive" ? "Windhover engine is not active" : String(obj.error));
+            return;
+          }
+          if (obj.stats) finalStats = obj.stats;
+          const piece = obj.choices?.[0]?.delta?.content;
+          if (piece) {
+            gotToken = true;
+            assistant += piece;
+            paint(assistant, finalStats);
+          }
+        }
+      }
+      if (!gotToken && !assistant.trim()) {
+        paint("No response from the model. Try again, or pick another installed model.");
+      } else {
+        paint(assistant || "No response.", finalStats);
+        if (finalStats) setLastStats(finalStats);
+      }
       void refresh();
     } catch (e) {
-      setMessages([...next, { role: "assistant", content: String(e) }]);
-      setStatus("Chat request failed — is Windhover running?");
+      if (ac.signal.aborted) {
+        paint(assistant.trim() ? `${assistant}\n\n_(stopped)_` : "Chat stopped.");
+        setStatus("Chat cancelled");
+      } else {
+        setMessages([...next, { role: "assistant", content: String(e) }]);
+        setStatus("Chat request failed — is Windhover running?");
+      }
     } finally {
+      window.clearTimeout(hardTimer);
+      if (chatAbortRef.current === ac) chatAbortRef.current = null;
       setSending(false);
     }
+  }
+
+  function stopChat() {
+    chatAbortRef.current?.abort();
   }
 
   async function loadWorkspaceTree() {
@@ -1029,6 +1168,124 @@ export function App() {
                   >
                     Uninstall
                   </button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+
+      {modelInfoOpen && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="modal-backdrop"
+              role="dialog"
+              aria-modal="true"
+              onClick={() => setModelInfoOpen(null)}
+            >
+              <div
+                className="modal modal-wide"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h2>{modelInfoOpen.name}</h2>
+                <p className="muted mono">{modelInfoOpen.hf_repo || modelInfoOpen.id}</p>
+                {modelInfoBusy ? <p className="muted">Loading Hugging Face data…</p> : null}
+                {modelInfoErr ? <p className="status-err">{modelInfoErr}</p> : null}
+                {modelInfo?.ok ? (
+                  <>
+                    <div className="info-grid">
+                      <div>
+                        <span className="info-k">Downloads</span>
+                        <strong>{formatCount(modelInfo.downloads)}</strong>
+                      </div>
+                      <div>
+                        <span className="info-k">Likes</span>
+                        <strong>{formatCount(modelInfo.likes)}</strong>
+                      </div>
+                      <div>
+                        <span className="info-k">Parameters</span>
+                        <strong>{formatParams(modelInfo.parameters)}</strong>
+                      </div>
+                      <div>
+                        <span className="info-k">License</span>
+                        <strong>{modelInfo.license || modelInfoOpen.license || "—"}</strong>
+                      </div>
+                      <div>
+                        <span className="info-k">Pipeline</span>
+                        <strong>{modelInfo.pipeline_tag || "—"}</strong>
+                      </div>
+                      <div>
+                        <span className="info-k">Library</span>
+                        <strong>{modelInfo.library_name || "—"}</strong>
+                      </div>
+                    </div>
+                    {modelInfo.card_summary ? (
+                      <p className="info-summary">{modelInfo.card_summary}</p>
+                    ) : (
+                      <p className="muted">{modelInfoOpen.description}</p>
+                    )}
+                    {modelInfo.benchmarks && modelInfo.benchmarks.length > 0 ? (
+                      <div className="bench-wrap">
+                        <h3>Benchmarks</h3>
+                        <table className="bench-table">
+                          <thead>
+                            <tr>
+                              <th>Dataset</th>
+                              <th>Metric</th>
+                              <th>Value</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {modelInfo.benchmarks.slice(0, 24).map((b, i) => (
+                              <tr key={i}>
+                                <td>{b.dataset || b.task || "—"}</td>
+                                <td>{b.metric || "—"}</td>
+                                <td>
+                                  {typeof b.value === "number"
+                                    ? Number.isInteger(b.value)
+                                      ? b.value
+                                      : b.value.toFixed(3)
+                                    : b.value ?? "—"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className="muted">
+                        No published model-index benchmarks on this card yet — open Hugging Face for
+                        community evals.
+                      </p>
+                    )}
+                    {modelInfo.tags && modelInfo.tags.length ? (
+                      <div className="tag-row">
+                        {modelInfo.tags.slice(0, 16).map((t) => (
+                          <span className="tag-chip" key={t}>
+                            {t}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
+                <div className="modal-actions">
+                  <button type="button" className="btn ghost" onClick={() => setModelInfoOpen(null)}>
+                    Close
+                  </button>
+                  {modelInfo?.html_url || modelInfoOpen.hf_repo ? (
+                    <a
+                      className="btn primary"
+                      href={
+                        modelInfo?.html_url ||
+                        `https://huggingface.co/${modelInfoOpen.hf_repo || modelInfoOpen.id}`
+                      }
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open on Hugging Face
+                    </a>
+                  ) : null}
                 </div>
               </div>
             </div>,
@@ -1385,6 +1642,14 @@ export function App() {
                         ) : null}
                       </div>
                       <div className="model-actions">
+                        <button
+                          type="button"
+                          className="btn ghost"
+                          onClick={() => void openModelInfo(m)}
+                          title="Hugging Face details & benchmarks"
+                        >
+                          More info
+                        </button>
                         {downloading ? (
                           <button type="button" className="btn primary" disabled>
                             {`Downloading… ${Math.round(rowProgress?.pct || 0)}%`}
@@ -1546,14 +1811,14 @@ export function App() {
                       ) : null}
                     </div>
                   ))}
-                  {sending ? (
+                  {sending && messages[messages.length - 1]?.role !== "assistant" ? (
                     <div className="bubble assistant thinking" aria-live="polite">
                       <span className="think-dots">
                         <i />
                         <i />
                         <i />
                       </span>
-                      Windhover is thinking…
+                      {activeMeta?.name || activeMeta?.id || "Model"} is thinking…
                     </div>
                   ) : null}
                 </>
@@ -1581,10 +1846,10 @@ export function App() {
                 <button
                   type="button"
                   className="btn primary"
-                  disabled={sending || !chatCapable.length}
-                  onClick={() => void send()}
+                  disabled={!chatCapable.length || (!sending && !input.trim())}
+                  onClick={() => (sending ? stopChat() : void send())}
                 >
-                  {sending ? "…" : "Send"}
+                  {sending ? "Stop" : "Send"}
                 </button>
               </div>
             </div>

@@ -35,6 +35,8 @@ KPK convert via `numpy` + `safetensors`. Lazy imports are **invisible** to Analy
 - [ ] `/v1/update` returns `available: true` when a newer tag exists (smoke after tag).
 - [ ] Windows apply uses silent NSIS (`/S /UPDATE /R`) — no uninstall wizard; app relaunches.
 - [ ] macOS apply replaces `/Applications/Windhover.app` (or running bundle) and relaunches.
+- [ ] Chat streams tokens (SSE) and never stays on “thinking” forever; Stop cancels.
+- [ ] Library **More info** loads `/v1/model-info` for Hub downloads/likes/benchmarks.
 
 ## Catalog vs engine
 

@@ -28,7 +28,7 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 # Windows consoles default to a legacy code page (cp1252/charmap). Progress
 # messages and huggingface_hub/tqdm use Unicode (e.g. U+2192), which raises
@@ -394,7 +394,7 @@ def _app_version() -> str:
                 return str(ver).lstrip("v")
         except Exception:
             continue
-    return os.environ.get("WINDHOVER_VERSION", "0.3.15").lstrip("v")
+    return os.environ.get("WINDHOVER_VERSION", "0.4.0").lstrip("v")
 
 
 def _parse_semver(v: str) -> tuple[int, int, int]:
@@ -1320,7 +1320,13 @@ def _format_engine_prompt(snap: Path, messages: list | None, flat_prompt: str) -
                 if content and role in ("user", "assistant", "system"):
                     chat.append({"role": role, "content": content})
             if chat and hasattr(tok, "apply_chat_template") and tok.chat_template:
-                return tok.apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
+                kwargs = {"tokenize": False, "add_generation_prompt": True}
+                # Qwen3 / Qwen3.5 default to long <think> blocks that burn max_tokens
+                # and look like a hung chat. Prefer direct answers in the app UI.
+                try:
+                    return tok.apply_chat_template(chat, enable_thinking=False, **kwargs)
+                except TypeError:
+                    return tok.apply_chat_template(chat, **kwargs)
         except Exception as e:
             sys.stderr.write(f"[windhover] chat template fallback: {e}\n")
     if messages:
@@ -1500,7 +1506,9 @@ def _engine_chat(
     *,
     messages: list | None = None,
     on_delta=None,
+    timeout_s: float | None = None,
 ) -> tuple[str, dict]:
+    import threading
     import time
 
     if not ENGINE_BIN.is_file():
@@ -1528,6 +1536,15 @@ def _engine_chat(
         env.setdefault("WH_SPARSE", "0")
     env.setdefault("IDOT", "1")
 
+    # Wall-clock budget: cold KPK load + prefill can be slow on CPU; still fail closed.
+    if timeout_s is None:
+        try:
+            timeout_s = float(os.environ.get("WINDHOVER_CHAT_TIMEOUT") or 600)
+        except Exception:
+            timeout_s = 600.0
+    if timeout_s < 30:
+        timeout_s = 30.0
+
     wh_stats: dict = {}
 
     def _dec(b: bytes) -> str:
@@ -1535,12 +1552,20 @@ def _engine_chat(
 
     try:
         if on_delta is None:
-            p = subprocess.run(
-                [str(ENGINE_BIN), "64", "4", "4"],
-                cwd=str(_engine_cwd()),
-                env=env,
-                capture_output=True,
-            )
+            try:
+                p = subprocess.run(
+                    [str(ENGINE_BIN), "64", "4", "4"],
+                    cwd=str(_engine_cwd()),
+                    env=env,
+                    capture_output=True,
+                    timeout=timeout_s,
+                )
+            except subprocess.TimeoutExpired as e:
+                raise EngineInactiveError(
+                    f"Windhover engine timed out after {int(timeout_s)}s while generating. "
+                    "Try a shorter prompt, fewer max tokens, or wait for a cold model load to finish once.",
+                    detail=f"timeout={timeout_s}s; bin={ENGINE_BIN}",
+                ) from e
             raw_out, err, rc = p.stdout, _dec(p.stderr), p.returncode
         else:
             # stream stdout bytes to the client as they arrive
@@ -1551,34 +1576,73 @@ def _engine_chat(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
+            # Drain stderr concurrently — otherwise a full pipe deadlocks the engine.
+            err_buf: list[bytes] = []
+
+            def _drain_err() -> None:
+                try:
+                    if proc.stderr is not None:
+                        err_buf.append(proc.stderr.read() or b"")
+                except Exception:
+                    pass
+
+            err_thread = threading.Thread(target=_drain_err, daemon=True)
+            err_thread.start()
             chunks: list[bytes] = []
             pending = b""
-            while True:
-                b = proc.stdout.read(64)
-                if not b:
-                    break
-                chunks.append(b)
-                pending += b
-                # hold back a partial UTF-8 tail and anything after the stats marker
-                if b"@@WH_STATS@@" in pending:
-                    emit, _, _ = pending.partition(b"@@WH_STATS@@")
-                    pending = b""
-                else:
-                    emit, pending = pending, b""
-                    for back in range(1, min(4, len(emit)) + 1):
-                        if emit[-back] & 0xC0 == 0xC0:  # UTF-8 lead byte in the tail
-                            pending = emit[-back:]
-                            emit = emit[:-back]
-                            break
-                if emit:
-                    try:
-                        on_delta(_clean_chat_text(emit.decode("utf-8", errors="replace"), soft=True))
-                    except Exception:
+            timed_out = False
+            try:
+                while True:
+                    if time.perf_counter() - t0 > timeout_s:
+                        timed_out = True
                         proc.kill()
-                        raise
+                        break
+                    if proc.stdout is None:
+                        break
+                    b = proc.stdout.read(64)
+                    if not b:
+                        break
+                    chunks.append(b)
+                    pending += b
+                    # hold back a partial UTF-8 tail and anything after the stats marker
+                    if b"@@WH_STATS@@" in pending:
+                        emit, _, _ = pending.partition(b"@@WH_STATS@@")
+                        pending = b""
+                    else:
+                        emit, pending = pending, b""
+                        for back in range(1, min(4, len(emit)) + 1):
+                            if emit[-back] & 0xC0 == 0xC0:  # UTF-8 lead byte in the tail
+                                pending = emit[-back:]
+                                emit = emit[:-back]
+                                break
+                    if emit:
+                        try:
+                            on_delta(_clean_chat_text(emit.decode("utf-8", errors="replace"), soft=True))
+                        except Exception:
+                            proc.kill()
+                            raise
+            finally:
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    try:
+                        proc.wait(timeout=2)
+                    except Exception:
+                        pass
+                err_thread.join(timeout=2)
             raw_out = b"".join(chunks)
-            err = _dec(proc.stderr.read())
-            rc = proc.wait()
+            err = _dec(b"".join(err_buf))
+            rc = proc.returncode if proc.returncode is not None else -1
+            if timed_out:
+                raise EngineInactiveError(
+                    f"Windhover engine timed out after {int(timeout_s)}s while generating. "
+                    "Try a shorter prompt or wait for a cold model load to finish once.",
+                    detail=f"timeout={timeout_s}s; stderr={err[:500]}",
+                )
     except FileNotFoundError as e:
         raise EngineInactiveError(
             "Windhover engine is not active — could not start windhover-engine.",
@@ -2061,9 +2125,9 @@ def _engine_env(model: Path, ram: float | None) -> dict[str, str]:
     if ram:
         env["RAM_GB"] = str(ram)
         env["COLI_HARD_CAP"] = "1"
-    # Windows: libgomp reads OMP_* in a constructor before main(). Match coli's
-    # env_for defaults so Phi/Qwen/KPK decode isn't stuck on 1 thread / passive wait.
-    if sys.platform == "win32" and not env.get("COLI_NO_OMP_TUNE"):
+    # libgomp / libomp read OMP_* before/at process start. Tune on Windows and
+    # macOS so Phi/Qwen/KPK decode isn't stuck on 1 thread / passive wait.
+    if sys.platform in ("win32", "darwin") and not env.get("COLI_NO_OMP_TUNE"):
         try:
             sys.path.insert(0, str(C_DIR))
             from resource_plan import physical_cpu_count  # type: ignore
@@ -2078,11 +2142,13 @@ def _engine_env(model: Path, ram: float | None) -> dict[str, str]:
             ("OMP_NUM_THREADS", n),
         ):
             env.setdefault(k, v)
-        # Lossless Windows I/O defaults (same as coli) — keep RAM footprint low
-        # via mmap/DIRECT while raising effective bandwidth.
-        env.setdefault("DIRECT", "1")
-        env.setdefault("PIPE", "1")
-        env.setdefault("PILOT_REAL", "1")
+        if sys.platform == "win32":
+            # Lossless Windows I/O defaults (same as coli)
+            env.setdefault("DIRECT", "1")
+            env.setdefault("PIPE", "1")
+            env.setdefault("PILOT_REAL", "1")
+        if sys.platform == "darwin":
+            env.setdefault("OMP_PROC_BIND", "close")
     return env
 
 
@@ -2822,6 +2888,121 @@ def _list_installed() -> list[dict]:
     return out
 
 
+def _hf_model_info(repo: str) -> dict:
+    """Fetch Hub overview + card evals for Library “More info” (proxied for CSP)."""
+    repo = (repo or "").strip().strip("/")
+    if not repo or "/" not in repo or ".." in repo or any(ch in repo for ch in " \t\n?#"):
+        return {"ok": False, "error": "Invalid Hugging Face repo id."}
+    url = f"https://huggingface.co/api/models/{quote(repo, safe='/')}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": f"Windhover/{_app_version()}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}", "id": repo}
+
+    # Optional expands for safetensors / full card (ignore failures).
+    for expand in ("safetensors", "cardData"):
+        if expand == "safetensors" and isinstance(data.get("safetensors"), dict):
+            continue
+        if expand == "cardData" and isinstance(data.get("cardData"), dict) and len(data["cardData"]) > 3:
+            continue
+        try:
+            exp_url = f"{url}?expand[]={expand}"
+            exp_req = urllib.request.Request(
+                exp_url,
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": f"Windhover/{_app_version()}",
+                },
+            )
+            with urllib.request.urlopen(exp_req, timeout=20) as resp:
+                extra = json.loads(resp.read().decode("utf-8"))
+            if isinstance(extra, dict):
+                if expand in extra:
+                    data[expand] = extra[expand]
+                elif expand == "cardData" and extra.get("cardData"):
+                    data["cardData"] = extra["cardData"]
+        except Exception:
+            pass
+
+    card = data.get("cardData") if isinstance(data.get("cardData"), dict) else {}
+    benchmarks: list[dict] = []
+    # HF model-index / evalResults (when authors publish them on the card)
+    model_index = card.get("model-index") or card.get("model_index") or []
+    if isinstance(model_index, list):
+        for entry in model_index:
+            if not isinstance(entry, dict):
+                continue
+            results = entry.get("results") or []
+            if not isinstance(results, list):
+                continue
+            for res in results:
+                if not isinstance(res, dict):
+                    continue
+                dataset = res.get("dataset") if isinstance(res.get("dataset"), dict) else {}
+                metrics = res.get("metrics") if isinstance(res.get("metrics"), list) else []
+                for met in metrics:
+                    if not isinstance(met, dict):
+                        continue
+                    benchmarks.append(
+                        {
+                            "task": (res.get("task") or {}).get("type")
+                            if isinstance(res.get("task"), dict)
+                            else res.get("task"),
+                            "dataset": dataset.get("name") or dataset.get("type") or entry.get("name"),
+                            "metric": met.get("type") or met.get("name"),
+                            "value": met.get("value"),
+                            "args": met.get("args"),
+                        }
+                    )
+    eval_results = data.get("evalResults") or card.get("eval_results") or []
+    if isinstance(eval_results, list) and not benchmarks:
+        for er in eval_results[:40]:
+            if isinstance(er, dict):
+                benchmarks.append(
+                    {
+                        "task": er.get("task_type") or er.get("task"),
+                        "dataset": er.get("dataset") or er.get("dataset_name"),
+                        "metric": er.get("metric_type") or er.get("metric"),
+                        "value": er.get("value") or er.get("metric_value"),
+                    }
+                )
+
+    st = data.get("safetensors") if isinstance(data.get("safetensors"), dict) else {}
+    params = st.get("total") or st.get("parameters")
+    tags = [t for t in (data.get("tags") or []) if isinstance(t, str)][:40]
+    return {
+        "ok": True,
+        "id": data.get("id") or repo,
+        "author": data.get("author"),
+        "downloads": data.get("downloads"),
+        "likes": data.get("likes"),
+        "pipeline_tag": data.get("pipeline_tag"),
+        "library_name": data.get("library_name"),
+        "license": card.get("license") or data.get("license"),
+        "created_at": data.get("createdAt") or data.get("created_at"),
+        "last_modified": data.get("lastModified") or data.get("last_modified"),
+        "tags": tags,
+        "parameters": params,
+        "safetensors": {
+            "total": st.get("total"),
+            "sharded": st.get("sharded"),
+        }
+        if st
+        else None,
+        "card_summary": (card.get("summary") or card.get("description") or "")[:1200] or None,
+        "benchmarks": benchmarks[:50],
+        "html_url": f"https://huggingface.co/{repo}",
+    }
+
+
 def _serve_library_api(host: str, port: int, model: Path | None) -> int:
     app_dist = ROOT / "app" / "dist"
     app_public = ROOT / "app" / "public"
@@ -2894,6 +3075,19 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
                 )
             if path == "/v1/catalog":
                 return self._json(200, {"models": load_catalog()})
+            if path in ("/v1/model-info", "/api/model-info", "/v1/hf/model"):
+                repo = (qs.get("repo") or qs.get("id") or [""])[0]
+                if not repo:
+                    # Fall back to catalog id lookup via ?model=
+                    mid = (qs.get("model") or [""])[0]
+                    for m in load_catalog():
+                        if m.get("id") == mid:
+                            repo = m.get("hf_repo") or m.get("preview_repo") or mid
+                            break
+                    if not repo:
+                        repo = mid
+                info = _hf_model_info(repo)
+                return self._json(200 if info.get("ok") else 404, info)
             if path == "/v1/models" or path == "/api/installed":
                 return self._json(200, {"data": _list_installed(), "object": "list"})
             if path in ("/api/stats", "/v1/stats"):

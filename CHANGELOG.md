@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0] — 2026-07-24
+
+### App
+- **Chat no longer hangs on “thinking”:** desktop chat streams SSE tokens, drains engine stderr (no pipe deadlock), and enforces a wall-clock timeout. Stop cancels the in-flight request.
+- **Thinking label** shows the active model name (`Phi-4 Mini is thinking…`) instead of “Windhover is thinking…”.
+- **Library → More info** opens Hugging Face downloads/likes/params/tags and published model-index benchmarks (proxied via `/v1/model-info`).
+- Qwen3/3.5 chat templates use `enable_thinking=False` so reply budget isn’t burned on hidden `<think>` blocks.
+
+### Runtime
+- **macOS parity:** OMP thread tuning (same idea as Windows) before spawning `windhover-engine`; silent in-app updates already replace `.app` and relaunch on Mac.
+- Engine chat timeouts + stderr drain on stream path (Mac + Windows).
+
+### Carry-forward from 0.3.15
+- Silent Windows in-app updates (`/S /UPDATE /R`) and macOS DMG auto-replace.
+- **Qwen3.5 9B · engine Q4** (`Qwen/Qwen3.5-9B`) via faithful GDN + gated attention KPK.
+
 ## [0.3.15] — 2026-07-24
 
 ### App — seamless in-app updates
