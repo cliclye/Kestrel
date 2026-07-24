@@ -197,6 +197,9 @@ static void matmul_q_exact_rows(float *y, const float *x, const int8_t *q, const
     #pragma omp for schedule(static)
     for (int o = 0; o < O; o++) {
         const int8_t *w = q + (int64_t)o * I;
+#if defined(__AVX2__)
+        y[o] = wh_dot_f32_i8_avx(x, w, I) * scale[o];
+#else
         float acc = 0.f;
         int i = 0;
 #if defined(__ARM_NEON)
@@ -210,6 +213,7 @@ static void matmul_q_exact_rows(float *y, const float *x, const int8_t *q, const
 #endif
         for (; i < I; i++) acc += x[i] * (float)w[i];
         y[o] = acc * scale[o];
+#endif
     }
 }
 
@@ -230,10 +234,13 @@ static void matmul_q_ex(float *y, const float *x, const int8_t *q, const float *
             y[o] = (float)dot_i8i8(q + (int64_t)o * I, xq, I) * scale[o] * sx;
         return;
     }
-    /* Exact path: NEON f32×int8 — skip OpenMP on tiny O (k/v projs) to avoid spawn tax. */
+    /* Exact path: AVX2 / NEON f32×int8 — skip OpenMP on tiny O (k/v projs) to avoid spawn tax. */
     #pragma omp parallel for schedule(static) if(O >= 512)
     for (int o = 0; o < O; o++) {
         const int8_t *w = q + (int64_t)o * I;
+#if defined(__AVX2__)
+        y[o] = wh_dot_f32_i8_avx(x, w, I) * scale[o];
+#else
         float acc = 0.f;
         int i = 0;
 #if defined(__ARM_NEON)
@@ -247,6 +254,7 @@ static void matmul_q_ex(float *y, const float *x, const int8_t *q, const float *
 #endif
         for (; i < I; i++) acc += x[i] * (float)w[i];
         y[o] = acc * scale[o];
+#endif
     }
 }
 
@@ -422,11 +430,14 @@ static void pack_int4(const float *w, uint8_t *q4, float *scale, int O, int I) {
     }
 }
 
-/* int4(packed)·int8 SDOT — same family as MoE path (M4: 4-acc). */
+/* int4(packed)·int8 SDOT — same family as MoE path (M4: 4-acc / x86: AVX2). */
 static inline int32_t dot_i4i8(const uint8_t *w4, const int8_t *x, int I) {
     int32_t sum = 0;
     int i = 0;
-#if defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+#if defined(__AVX2__)
+    (void)i;
+    return wh_dot_i4i8_avx(w4, x, I);
+#elif defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     const uint8x16_t m4q = vdupq_n_u8(0x0F);
     const int8x16_t b8q = vdupq_n_s8(8);
     int32x4_t a0 = vdupq_n_s32(0), a1 = vdupq_n_s32(0);

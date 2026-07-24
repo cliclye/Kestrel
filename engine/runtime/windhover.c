@@ -53,7 +53,7 @@
 
 #define WH_GS 64          /* weight quant group */
 #define WH_KVG 32         /* kv quant group */
-#define WH_PREFILL_S 64   /* prefill chunk */
+#define WH_PREFILL_S 80   /* prefill chunk (was 64; matches WH_MAXS headroom) */
 #define WH_MAXS 80        /* max batch rows in scratch (prefill/verify) */
 #define WH_MAX_HD 512     /* max head_dim for stack q8 buffer */
 #define WH_MAX_HIDDEN 8192
@@ -316,7 +316,16 @@ static inline float dot_i4g(const uint8_t *w4, const wh_f16 *sc, const wh_f16 *z
 /* fused axpy: acc[d] += hj * (sc_g*q[d] + zp_g), single pass, no scratch */
 static inline void axpy_i4g_row(float *acc, const uint8_t *w4, const wh_f16 *sc,
                                 const wh_f16 *zp, float hj, int I) {
-#if defined(__ARM_NEON)
+#if defined(__AVX2__)
+    int ng = I / WH_GS;
+    for (int g = 0; g < ng; g++) {
+        const uint8_t *wg = w4 + ((int64_t)g * WH_GS >> 1);
+        float vs = hj * (float)sc[g], vz = hj * (float)zp[g];
+        float *o = acc + g * WH_GS;
+        wh_axpy_i4g32_avx(o, wg, vs, vz);
+        wh_axpy_i4g32_avx(o + 32, wg + 16, vs, vz);
+    }
+#elif defined(__ARM_NEON)
     const uint8x16_t m4q = vdupq_n_u8(0x0F);
     const int8x16_t b8q = vdupq_n_s8(8);
     int ng = I / WH_GS;
@@ -368,6 +377,9 @@ static inline void axpy_i4g_row(float *acc, const uint8_t *w4, const wh_f16 *sc,
 /* int8-row axpy: acc += hj * rs * q8[0..I) */
 static inline void axpy_i8_row(float *acc, const int8_t *q8, float rs, float hj, int I) {
     float s = hj * rs;
+#if defined(__AVX2__)
+    wh_axpy_i8_avx(acc, q8, s, I);
+#else
     int i = 0;
 #if defined(__ARM_NEON)
     float32x4_t vs = vdupq_n_f32(s);
@@ -385,6 +397,7 @@ static inline void axpy_i8_row(float *acc, const int8_t *q8, float rs, float hj,
     }
 #endif
     for (; i < I; i++) acc[i] += s * (float)q8[i];
+#endif
 }
 
 static inline void deq_i8_row(const int8_t *q8, float rs, float *out, int I) {
@@ -594,6 +607,12 @@ static void mm_wt_run(const WT *w, const int8_t *xq, const float *sx,
     if (sme_rt < 0) sme_rt = getenv("WH_SME_RUNTIME") ? 1 : 0;
     if (sme_rt && S >= 16 && mm_wt_sme_i8(w, xq, sx, y, S, ystride))
         return;
+#endif
+#ifdef _OPENMP
+    if (omp_in_parallel()) {
+        mm_wt(w, xq, sx, xqsum, y, S, ystride);
+        return;
+    }
 #endif
     #pragma omp parallel
     { mm_wt(w, xq, sx, xqsum, y, S, ystride); }
@@ -1077,7 +1096,10 @@ static inline void kv_store_row(int8_t *dst8, wh_f16 *dsts, const float *src, in
 static inline float kv_score(const int8_t *q8, float qs, const int8_t *k8,
                              const wh_f16 *ks, int hd) {
     float acc = 0.f;
-#if defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+#if defined(__AVX2__)
+    for (int g = 0; g < hd; g += WH_KVG)
+        acc += (float)ks[g / WH_KVG] * (float)wh_dot_i8i8_avx(q8 + g, k8 + g, WH_KVG);
+#elif defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     for (int g = 0; g < hd; g += WH_KVG) {
         int32x4_t p = vdupq_n_s32(0);
         p = vdotq_s32(p, vld1q_s8(q8 + g), vld1q_s8(k8 + g));
@@ -1096,7 +1118,10 @@ static inline float kv_score(const int8_t *q8, float qs, const int8_t *k8,
 
 static inline void kv_axpy_v(float *ctx, float a, const int8_t *v8,
                              const wh_f16 *vs, int hd) {
-#if defined(__ARM_NEON)
+#if defined(__AVX2__)
+    for (int g = 0; g < hd; g += WH_KVG)
+        wh_axpy_i8_avx(ctx + g, v8 + g, a * (float)vs[g / WH_KVG], WH_KVG);
+#elif defined(__ARM_NEON)
     for (int g = 0; g < hd; g += WH_KVG) {
         float32x4_t va = vdupq_n_f32(a * (float)vs[g / WH_KVG]);
         for (int j = 0; j < WH_KVG; j += 8) {

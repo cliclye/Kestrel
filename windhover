@@ -394,7 +394,7 @@ def _app_version() -> str:
                 return str(ver).lstrip("v")
         except Exception:
             continue
-    return os.environ.get("WINDHOVER_VERSION", "0.3.13").lstrip("v")
+    return os.environ.get("WINDHOVER_VERSION", "0.3.14").lstrip("v")
 
 
 def _parse_semver(v: str) -> tuple[int, int, int]:
@@ -1439,8 +1439,13 @@ def _engine_chat(
     env["QUIET"] = "1"
     env["DRAFT"] = "0"
     env["WH_JSON_STATS"] = "1"
-    # Prefer accuracy in Chat; speed seekers can set WH_SPARSE explicitly.
-    env.setdefault("WH_SPARSE", "0")
+    # Windows chat: mild CATS sparsity (skip ~25% of low-|gate| FFN rows) is a large
+    # tok/s win on Phi/Qwen with acceptable quality. Set WH_SPARSE=0 to force full FFN.
+    if sys.platform == "win32":
+        env.setdefault("WH_SPARSE", "25")
+    else:
+        env.setdefault("WH_SPARSE", "0")
+    env.setdefault("IDOT", "1")
 
     wh_stats: dict = {}
 

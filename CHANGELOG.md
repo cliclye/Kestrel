@@ -1,6 +1,4 @@
-# Changelog
 
-## [0.3.13] — 2026-07-24
 
 ### Fixed — Windows tok/s + RAM (Phi / Qwen / dense KPK)
 - **RAM stuck at 0 on Windows:** Process RSS used Unix-only `resource.getrusage`, which always failed on native Windows CPython. Now uses `GetProcessMemoryInfo` (WorkingSet). Chat stats also prefer the engine’s `rss_gb` / `footprint_gb` when present so the UI reflects real model memory without inflating it via fake counters.
