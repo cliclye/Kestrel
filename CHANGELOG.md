@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.1] — 2026-07-24
+
+### Fixed
+- **Chat `TypeError: Failed to fetch`:** SSE responses were missing CORS headers required by the Tauri WebView (UI is not same-origin with `127.0.0.1:8000`). Streaming now sends `Access-Control-Allow-Origin`, and the UI falls back to non-stream chat if SSE still fails.
+
 ## [0.4.0] — 2026-07-24
 
 ### App

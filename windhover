@@ -394,7 +394,7 @@ def _app_version() -> str:
                 return str(ver).lstrip("v")
         except Exception:
             continue
-    return os.environ.get("WINDHOVER_VERSION", "0.4.0").lstrip("v")
+    return os.environ.get("WINDHOVER_VERSION", "0.4.1").lstrip("v")
 
 
 def _parse_semver(v: str) -> tuple[int, int, int]:
@@ -3653,20 +3653,29 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
                             ),
                         )
                     if want_stream:
-                        # OpenAI-style SSE: chunks as the engine emits bytes
+                        # OpenAI-style SSE: chunks as the engine emits bytes.
+                        # Must send CORS — Tauri UI is not same-origin with :8000.
                         mid_ = body.get("model") or _snap_meta(snap).get("id") or snap.name
-                        self.send_response(200)
-                        self.send_header("Content-Type", "text/event-stream")
-                        self.send_header("Cache-Control", "no-cache")
-                        self.send_header("X-Accel-Buffering", "no")
-                        self.end_headers()
+                        try:
+                            self.send_response(200)
+                            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                            self.send_header("Cache-Control", "no-cache, no-transform")
+                            self.send_header("Connection", "close")
+                            self.send_header("X-Accel-Buffering", "no")
+                            self.send_header("Access-Control-Allow-Origin", "*")
+                            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+                            self.send_header("Access-Control-Expose-Headers", "Content-Type")
+                            self.end_headers()
+                        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                            return None
 
                         def _sse(obj):
                             try:
                                 self.wfile.write(
-                                    b"data: " + json.dumps(obj).encode() + b"\n\n")
+                                    b"data: " + json.dumps(obj, ensure_ascii=True).encode("utf-8") + b"\n\n"
+                                )
                                 self.wfile.flush()
-                            except (BrokenPipeError, ConnectionResetError):
+                            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                                 raise
 
                         def on_delta(piece: str):
@@ -3695,24 +3704,25 @@ def _serve_library_api(host: str, port: int, model: Path | None) -> int:
                             self.wfile.write(b"data: [DONE]\n\n")
                             self.wfile.flush()
                         except EngineInactiveError as e:
-                            _sse({
-                                "id": "kestrel-chat",
-                                "object": "chat.completion.chunk",
-                                "model": mid_,
-                                "error": str(e),
-                                "code": "engine_inactive",
-                                "engine_active": False,
-                                "detail": e.detail,
-                                "choices": [{"index": 0, "delta": {},
-                                             "finish_reason": "error"}],
-                            })
-                            self.wfile.write(b"data: [DONE]\n\n")
                             try:
+                                _sse({
+                                    "id": "kestrel-chat",
+                                    "object": "chat.completion.chunk",
+                                    "model": mid_,
+                                    "error": str(e),
+                                    "code": "engine_inactive",
+                                    "engine_active": False,
+                                    "detail": e.detail,
+                                    "choices": [{"index": 0, "delta": {},
+                                                 "finish_reason": "error"}],
+                                })
+                                self.wfile.write(b"data: [DONE]\n\n")
                                 self.wfile.flush()
-                            except (BrokenPipeError, ConnectionResetError):
+                            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                                 pass
-                        except (BrokenPipeError, ConnectionResetError):
+                        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                             pass
+                        self.close_connection = True
                         return None
                     try:
                         text, stats = _engine_chat(

@@ -789,8 +789,9 @@ export function App() {
     const useStream = !isOllamaModel(
       matchInstalled(chatCapable, modelId) || { id: modelId }
     );
-    try {
-      const r = await fetch(apiUrl("/v1/chat/completions"), {
+
+    async function postChat(stream: boolean) {
+      return fetch(apiUrl("/v1/chat/completions"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: ac.signal,
@@ -799,12 +800,28 @@ export function App() {
           messages: next.map(({ role, content }) => ({ role, content })),
           max_tokens: 512,
           temperature: 0.7,
-          stream: useStream,
+          stream,
         }),
       });
+    }
+
+    try {
+      let r: Response;
+      let streaming = useStream;
+      try {
+        r = await postChat(streaming);
+      } catch (e) {
+        // Tauri/WebView sometimes rejects SSE (CORS / HTTP1.1 framing). Fall back once.
+        if (streaming && !ac.signal.aborted) {
+          streaming = false;
+          r = await postChat(false);
+        } else {
+          throw e;
+        }
+      }
 
       const ctype = r.headers.get("content-type") || "";
-      if (!useStream || !ctype.includes("text/event-stream")) {
+      if (!streaming || !ctype.includes("text/event-stream")) {
         const j = await r.json();
         const st = (j?.stats || {}) as ChatStats;
         if (typeof j?.engine_active === "boolean") st.engine_active = j.engine_active;
@@ -906,7 +923,12 @@ export function App() {
         paint(assistant.trim() ? `${assistant}\n\n_(stopped)_` : "Chat stopped.");
         setStatus("Chat cancelled");
       } else {
-        setMessages([...next, { role: "assistant", content: String(e) }]);
+        const msg = e instanceof Error ? e.message : String(e);
+        const friendly =
+          /failed to fetch|networkerror|load failed/i.test(msg)
+            ? "Could not reach the Windhover server (Failed to fetch). Is the app/API running on port 8000? Try Send again."
+            : msg;
+        setMessages([...next, { role: "assistant", content: friendly }]);
         setStatus("Chat request failed — is Windhover running?");
       }
     } finally {
